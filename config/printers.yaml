@@ -58,6 +58,7 @@ printers:
 
   normal:
     label: "Normal"
+    label_th: "เครื่องมาตรฐาน"
     model: "Bambu Lab P1S"
     build_volume_mm: [256, 256, 256]
 
@@ -79,6 +80,7 @@ printers:
 
   large:
     label: "Large"
+    label_th: "เครื่องขนาดใหญ่"
     model: "Large format"
     build_volume_mm: [400, 400, 450]
 

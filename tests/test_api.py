@@ -5,8 +5,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FX = ROOT / "tests" / "fixtures"
 
-# Keep the test run out of the real order log.
-os.environ.setdefault("WEBUILT_TEST", "1")
+# Keep the test run out of the real order log: app reads WEBUILT_DB at import.
+os.environ["WEBUILT_DB"] = str(pathlib.Path(tempfile.mkdtemp()) / "orders.db")
 
 from fastapi.testclient import TestClient
 import app as appmod

@@ -179,6 +179,8 @@
       <div><label for="c-name">Customer name</label><input type="text" id="c-name" placeholder="K'…"></div>
       <div><label for="c-contact">Contact</label><input type="text" id="c-contact" placeholder="LINE / phone"></div>
       <div><label for="c-receipt">Receipt no. (optional)</label><input type="text" id="c-receipt" placeholder="auto: WB-YYMM-NNN"></div>
+      <div><label for="c-lang">Receipt language</label>
+        <select id="c-lang"><option value="en">English</option><option value="th">ภาษาไทย</option></select></div>
     </div>
     <div><label for="c-notes">Note on the receipt</label><input type="text" id="c-notes" placeholder="e.g. pick up at building 81"></div>
   </details>
@@ -224,6 +226,14 @@ function showProfileHint() {
   $('#prep').placeholder = `${p.prep_minutes} (default)`;
 }
 $('#profile').onchange = showProfileHint;
+
+try {
+  const saved = localStorage.getItem('receiptLang');
+  if (saved) $('#c-lang').value = saved;
+} catch (e) {}
+$('#c-lang').onchange = () => {
+  try { localStorage.setItem('receiptLang', $('#c-lang').value); } catch (e) {}
+};
 
 // --- tabs -------------------------------------------------------------
 function setMode(next) {
@@ -399,7 +409,7 @@ function render(d) {
   $('#out').innerHTML = `
     <div class="total">
       <div class="amount">${money(d.total, cur)}</div>
-      ${d.receipt_url ? `<a href="${d.receipt_url}" target="_blank" class="rlink">Open ${d.receipt_no} →</a>` : ''}
+      ${d.receipt_url ? `<a href="${d.receipt_url}?lang=${$('#c-lang').value}" target="_blank" class="rlink">Open ${d.receipt_no} →</a>` : ''}
       <div class="meta">${b.order.grams_total} g · ${b.order.hours_total.toFixed(2)} h ·
         ${b.order.plates} plate${b.order.plates > 1 ? 's' : ''}</div>
     </div>

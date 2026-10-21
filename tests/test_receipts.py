@@ -5,13 +5,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FX = ROOT / "tests" / "fixtures"
 
+import os
+
+# Never touch the real order log: app reads WEBUILT_DB at import.
+os.environ["WEBUILT_DB"] = str(pathlib.Path(tempfile.mkdtemp()) / "orders.db")
+
 from fastapi.testclient import TestClient
 import app as appmod
 import receipt as receipt_doc
 
-# Never touch the real order log.
-appmod.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "orders.db"
-appmod.init_db()
 client = TestClient(appmod.app)
 
 FORBIDDEN = ("cost_per_kg", "estimated_direct_cost", "margin", "supplier",
@@ -37,22 +39,28 @@ def visible_text(html):
     return html.lower()
 
 
+FORBIDDEN_TH = ("ต้นทุน", "กำไร", "สถาปัตย", "วิศวกรรม")   # cost, profit, faculties
+
+
 def test_no_internal_numbers_reach_the_customer():
     """Supplier cost, margin and the client-profile name stay internal,
-    for every profile, in every format."""
+    for every profile, in every format, in every language."""
     for prof in ("engineering", "architecture", "general"):
         q = save_upload(["orca_petg_single.gcode", "bambu_ams_multi.gcode"],
                         client_profile=prof, postproc_minutes="15")
         qid = q["quote_id"]
-        blobs = {
-            "json": json.dumps(view(qid), ensure_ascii=False).lower(),
-            "html": visible_text(client.get(f"/receipt/{qid}").text),
-            "text": client.get(f"/receipt/{qid}.txt").text.lower(),
-        }
-        for fmt, blob in blobs.items():
-            for bad in FORBIDDEN:
-                assert bad not in blob, f"{prof}/{fmt} leaked '{bad}'"
-    print(f"  no leaks        3 profiles x 3 formats, {len(FORBIDDEN)} terms checked")
+        for lang in ("en", "th"):
+            blobs = {
+                "json": json.dumps(client.get(f"/api/receipt/{qid}?lang={lang}").json(),
+                                   ensure_ascii=False).lower(),
+                "html": visible_text(client.get(f"/receipt/{qid}?lang={lang}").text),
+                "text": client.get(f"/receipt/{qid}.txt?lang={lang}").text.lower(),
+            }
+            for fmt, blob in blobs.items():
+                for bad in FORBIDDEN + FORBIDDEN_TH:
+                    assert bad not in blob, f"{prof}/{lang}/{fmt} leaked '{bad}'"
+    print(f"  no leaks        3 profiles x 2 languages x 3 formats, "
+          f"{len(FORBIDDEN) + len(FORBIDDEN_TH)} terms checked")
 
 
 def test_lines_add_up_to_the_total_exactly():
@@ -71,10 +79,12 @@ def test_lines_add_up_to_the_total_exactly():
         if copies:
             data["copies"] = copies
         q = client.post("/api/quote", files=files, data={"save": "true", **data}).json()
-        v = view(q["quote_id"])
-        s = round(sum(l["amount"] for l in v["lines"]), 2)
-        assert s == v["total"] == q["total"], (s, v["total"], q["total"])
-    print(f"  adds up         {len(cases)} orders, every receipt sums to its total")
+        for lang in ("en", "th"):
+            v = client.get(f"/api/receipt/{q['quote_id']}?lang={lang}").json()
+            s = round(sum(l["amount"] for l in v["lines"]), 2)
+            assert s == v["total"] == q["total"], (lang, s, v["total"], q["total"])
+            assert len(v["lines"]) == len(view(q["quote_id"])["lines"])
+    print(f"  adds up         {len(cases)} orders x 2 languages, same lines, exact totals")
 
 
 def test_minimum_floor_is_labelled_as_minimum():
@@ -161,6 +171,81 @@ def test_txt_route_not_shadowed():
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
     assert client.get("/receipt/999999").status_code == 404
     print("  routes          /receipt/N.txt serves text; unknown id 404s")
+
+
+# ---------------------------------------------------------------------------
+# languages
+# ---------------------------------------------------------------------------
+
+def test_locales_have_the_same_keys_and_placeholders():
+    """A key missing from th.yaml would silently show English; a placeholder
+    typo would crash a receipt. Catch both here."""
+    import string, yaml
+    loc = {l: yaml.safe_load((ROOT / "locales" / f"{l}.yaml").read_text())
+           for l in ("en", "th")}
+    assert set(loc["en"]) == set(loc["th"]), set(loc["en"]) ^ set(loc["th"])
+    fields = lambda s: {f for _, f, _, _ in string.Formatter().parse(s) if f}
+    for k, en in loc["en"].items():
+        if isinstance(en, str):
+            assert fields(en) == fields(loc["th"][k]), k
+    assert set(loc["en"]["payment_methods"]) == set(loc["th"]["payment_methods"])
+    assert set(loc["en"]["payment_methods"]) >= set(
+        appmod.config["receipt"]["payment_methods"])
+    print(f"  locale parity   {len(loc['en'])} keys, placeholders match, "
+          "every payment method translated")
+
+
+def test_thai_receipt():
+    q = save_upload(["orca_petg_single.gcode"], rush="next_day", delivery="university")
+    qid = q["quote_id"]
+    v = client.get(f"/api/receipt/{qid}?lang=th").json()
+    assert v["lang"] == "th" and v["title"] == "ใบเสนอราคา"
+    assert "2569" in v["date"] and "ต.ค." in v["date"], v["date"]     # Buddhist Era
+    assert v["order"]["rush"] == "ภายในวันถัดไป"
+    assert v["order"]["delivery"] == "ส่งให้ที่มหาลัย"
+    assert v["terms"][0].startswith("ค่าเผื่องานพิมพ์เสีย")
+    client.post(f"/api/orders/{qid}/payment", data={"status": "paid", "method": "Cash"})
+    v = client.get(f"/api/receipt/{qid}?lang=th").json()
+    assert v["title"] == "ใบเสร็จรับเงิน" and v["payment_method"] == "เงินสด"
+    html = client.get(f"/receipt/{qid}?lang=th").text
+    assert '<html lang="th">' in html and ">English</a>" in html
+    print(f"  thai            {v['date']} · {v['order']['rush']} · {v['payment_method']}")
+
+
+def test_language_fallbacks():
+    q = save_upload(["orca_tiny_pla.gcode"])
+    qid = q["quote_id"]
+    default = appmod.config["receipt"].get("default_language", "en")
+    assert client.get(f"/api/receipt/{qid}").json()["lang"] == default
+    assert client.get(f"/api/receipt/{qid}?lang=fr").json()["lang"] == default
+    # a language with no locale file reads English rather than raw keys
+    assert receipt_doc.Locale("xx")("title_quotation") == "Quotation"
+    print(f"  fallbacks       no lang / unknown lang -> '{default}', missing keys -> English")
+
+
+def test_old_quotes_without_label_keys_still_render():
+    """Quotes saved before labels were stored by key keep their saved label."""
+    q = save_upload(["orca_tiny_pla.gcode"], delivery="university")
+    row, quote = appmod._load_order(q["quote_id"])
+    for k in ("rush_key", "delivery_key"):
+        quote["breakdown"]["rates"].pop(k)
+    v = receipt_doc.build_view(row, quote, appmod.config["receipt"], "th",
+                               pricing_cfg=appmod.config["pricing"],
+                               printers_cfg=appmod.config["printers"])
+    assert v["order"]["delivery"] == quote["breakdown"]["rates"]["delivery_label"]
+    print(f"  old quotes      no stored key -> saved label '{v['order']['delivery']}'")
+
+
+def test_thai_method_text_never_overclaims():
+    q = save_upload(["orca_tiny_pla.gcode"])
+    row, quote = appmod._load_order(q["quote_id"])
+    rc = copy.deepcopy(appmod.config["receipt"])
+    text = " ".join(receipt_doc.build_view(row, quote, rc, "th")["method"])
+    assert "กำลังเก็บสถิติ" in text and "สถิติงานเสียของเครื่องพิมพ์ของเราเอง" not in text
+    rc["free_reprints"] = False
+    text = " ".join(receipt_doc.build_view(row, quote, rc, "th")["method"])
+    assert "ไม่ต้องจ่ายเพิ่ม" not in text
+    print("  thai claims     same conditional wording as English")
 
 
 if __name__ == "__main__":

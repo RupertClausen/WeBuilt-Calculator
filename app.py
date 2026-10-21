@@ -40,7 +40,9 @@ from slicefile import FilamentUse, ParseError, SlicedJob, parse
 
 BASE = Path(__file__).parent
 CONFIG_DIR = BASE / "config"
-DB_PATH = BASE / "orders.db"
+# WEBUILT_DB points the server at another database, e.g. a throwaway one for
+# testing, so trial quotes never land in the real order log.
+DB_PATH = Path(os.environ.get("WEBUILT_DB") or BASE / "orders.db")
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024        # sliced files get big
 
 app = FastAPI(title="WeBuilt quote service", version="1.0")
@@ -581,26 +583,28 @@ def _load_order(quote_id: int) -> tuple[dict, dict]:
     return row, json.loads(row["detail_json"])
 
 
-def _view(quote_id: int) -> dict:
+def _view(quote_id: int, lang: str | None = None) -> dict:
     row, quote = _load_order(quote_id)
-    return receipt_doc.build_view(row, quote, config["receipt"])
+    return receipt_doc.build_view(
+        row, quote, config["receipt"], lang,
+        pricing_cfg=config["pricing"], printers_cfg=config["printers"])
 
 
 @app.get("/api/receipt/{quote_id}")
-def receipt_json(quote_id: int):
+def receipt_json(quote_id: int, lang: str | None = None):
     """The customer-safe view model. Nothing outside it can reach a receipt."""
-    return _view(quote_id)
+    return _view(quote_id, lang)
 
 
 @app.get("/receipt/{quote_id:int}", response_class=HTMLResponse)
-def receipt_html(quote_id: int):
+def receipt_html(quote_id: int, lang: str | None = None):
     return HTMLResponse(receipt_doc.render_html(
-        _view(quote_id), quote_id, config["receipt"].get("payment_methods")))
+        _view(quote_id, lang), quote_id, config["receipt"].get("payment_methods")))
 
 
 @app.get("/receipt/{quote_id:int}.txt", response_class=PlainTextResponse)
-def receipt_text(quote_id: int):
-    return PlainTextResponse(receipt_doc.render_text(_view(quote_id)))
+def receipt_text(quote_id: int, lang: str | None = None):
+    return PlainTextResponse(receipt_doc.render_text(_view(quote_id, lang)))
 
 
 @app.post("/api/orders/{quote_id}/payment")

@@ -3,9 +3,18 @@
 # Shop identity and the terms printed on every document. Write these in Thai,
 # English, or both; the renderer prints them as-is.
 
+# Language of a receipt when none is chosen. Switch per receipt with the
+# button on the receipt page, or add ?lang=th / ?lang=en to its link.
+default_language: "en"
+languages: ["en", "th"]
+
+# Any text field below can be one string (used in every language) or a
+# mapping with one entry per language, like `tagline`.
 business:
   name: "WeBuilt 3D Printing Service"
-  tagline: "FDM printing for students and makers"
+  tagline:
+    en: "FDM printing for students and makers"
+    th: "บริการพิมพ์ 3 มิติสำหรับนักศึกษาและเมกเกอร์"
   address: ""                 # TODO e.g. building / campus / LINE pickup point
   contact:
     line: ""                  # TODO LINE ID
@@ -52,12 +61,20 @@ free_reprints: true
 # for it, the document has to say what it buys, or the line has no meaning.
 # Review these before using them. They are placeholders.
 terms:
-  - "The failure allowance covers reprints caused by a print failure on our side. If a part fails or comes out defective because of printing, we reprint it at no extra charge."
-  - "Changes to the design, scale, or material after printing starts are quoted as a new job."
-  - "Print times and filament weights are the slicer's estimates. The quoted price is fixed and does not change if the actual print runs longer or shorter."
-  - "Quotations are valid for 7 days. Prices follow the filament roster on the date of the quote."
+  en:
+    - "The failure allowance covers reprints caused by a print failure on our side. If a part fails or comes out defective because of printing, we reprint it at no extra charge."
+    - "Changes to the design, scale, or material after printing starts are quoted as a new job."
+    - "Print times and filament weights are the slicer's estimates. The quoted price is fixed and does not change if the actual print runs longer or shorter."
+    - "Quotations are valid for 7 days. Prices follow the filament roster on the date of the quote."
+  th:
+    - "ค่าเผื่องานพิมพ์เสียครอบคลุมการพิมพ์ซ้ำเมื่องานเสียจากฝั่งเรา หากชิ้นงานพิมพ์ล้มเหลวหรือมีตำหนิจากการพิมพ์ เราพิมพ์ใหม่ให้โดยไม่คิดค่าใช้จ่ายเพิ่ม"
+    - "การแก้ไขแบบ สเกล หรือวัสดุ หลังเริ่มพิมพ์แล้ว จะคิดราคาเป็นงานใหม่"
+    - "เวลาพิมพ์และน้ำหนักเส้นเป็นค่าประมาณจากโปรแกรมสไลซ์ ราคาที่เสนอเป็นราคาคงที่ ไม่เปลี่ยนแม้พิมพ์จริงจะใช้เวลานานหรือสั้นกว่าที่ประมาณ"
+    - "ใบเสนอราคามีอายุ 7 วัน ราคาเส้นพลาสติกอ้างอิงตามวันที่ออกใบเสนอราคา"
 
-footer: "Thank you for printing with WeBuilt."
+footer:
+  en: "Thank you for printing with WeBuilt."
+  th: "ขอบคุณที่ใช้บริการ WeBuilt"
 
 # ---------------------------------------------------------------------------
 # Numbering seed

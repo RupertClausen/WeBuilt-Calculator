@@ -8,7 +8,11 @@ python3 -m uvicorn app:app --reload --port 8000
 # open http://localhost:8000
 ```
 
-Run the tests with `python3 tests/run_all.py` (37 tests, 4 suites).
+To try things without adding to the real order log, point the server at a
+throwaway database: `WEBUILT_DB=/tmp/trial.db python3 -m uvicorn app:app --port 8001`.
+
+Run the tests with `python3 tests/run_all.py` (42 tests, 4 suites). They
+use a throwaway database and never touch `orders.db`.
 
 ---
 
@@ -259,6 +263,38 @@ to override; reusing one is refused.
 (PromptPay / bank transfer / cash). Then it becomes a *Receipt* with a paid
 stamp and timestamp. The operator bar never prints.
 
+### English and Thai
+
+Every receipt can be shown in either language. The **ภาษาไทย** / **English**
+link at the top right of a receipt switches it, and the "Receipt language"
+picker in the quote form sets which one the **Open WB-… →** link opens. The
+plain-text copy for LINE follows whichever language is on screen. You can
+also add `?lang=th` or `?lang=en` to any receipt link.
+
+`default_language` in `config/receipt.yaml` decides what a receipt shows when
+no language is chosen. It is `en` for now.
+
+The Thai version uses Thai dates with the Buddhist Era year
+(`21 ต.ค. 2569 14:10 น.`), "หน่วย" for kWh, and Thai names for rush tiers,
+delivery options, printers and payment methods. The amounts and lines are
+identical in both languages; a test checks it.
+
+All the wording lives in `locales/en.yaml` and `locales/th.yaml`, not in the
+code. **The Thai text is my translation: please read `locales/th.yaml` and
+fix anything that sounds off.** Edits take effect on the next page load. Keep
+the `{placeholders}` intact; a test fails if a key or placeholder in one file
+has no match in the other. A key missing from `th.yaml` shows English rather
+than breaking the page.
+
+Labels from the config files have a Thai version alongside: `label_th` on
+rush tiers, delivery options and printers, and `{en: …, th: …}` for the
+tagline, terms and footer in `receipt.yaml`. Any of those text fields can also
+be a single string used for both languages.
+
+Quotes store the rush, delivery and printer *keys*, so a receipt can show
+those labels in any language later. Quotes saved before this change keep the
+label they were saved with.
+
 ### What "transparent" means here
 
 The document shows every charge, the quantity and unit rate behind it, a
@@ -307,7 +343,8 @@ Three files under `config/`, hot-reloaded on save — no restart needed.
 | `pricing.yaml` | policy: fees, headroom, rush tiers, delivery, rounding | rarely |
 | `printers.yaml` | measured per-machine physics and failure models | when you measure |
 | `filaments.yaml` | the price roster | constantly |
-| `receipt.yaml` | shop details, terms, receipt numbering | rarely |
+| `receipt.yaml` | shop details, terms, receipt numbering, default language | rarely |
+| `locales/*.yaml` | every word on a receipt, per language | when wording needs fixing |
 
 `filaments.yaml` is separate because it is the one you will edit weekly, and
 it keeps **cost and price in two different columns on purpose**:
@@ -363,7 +400,7 @@ total  = round_up(max(order + delivery_fee, minimum))
 | `GET /api/orders` | quote history |
 | `POST /api/orders/{id}/outcome` | mark `completed` / `failed` |
 | `POST /api/orders/{id}/payment` | `status=paid\|unpaid`, `method` |
-| `GET /receipt/{id}` · `/receipt/{id}.txt` · `/api/receipt/{id}` | quotation / receipt |
+| `GET /receipt/{id}` · `/receipt/{id}.txt` · `/api/receipt/{id}` | quotation / receipt; add `?lang=th` or `?lang=en` |
 
 ## Parser
 

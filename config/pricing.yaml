@@ -84,9 +84,9 @@ headroom: 1.15
 # Replaces the old (total_days / requested_days) formula, which was unbounded
 # and silently evaluated to zero whenever the two inputs matched.
 rush_tiers:
-  standard:  {multiplier: 1.00, label: "Standard"}
-  next_day:  {multiplier: 1.20, label: "Next day"}
-  same_day:  {multiplier: 1.50, label: "Same day"}
+  standard:  {multiplier: 1.00, label: "Standard", label_th: "ปกติ"}
+  next_day:  {multiplier: 1.20, label: "Next day",  label_th: "ภายในวันถัดไป"}
+  same_day:  {multiplier: 1.50, label: "Same day",  label_th: "ภายในวันเดียว"}
 
 default_rush: standard
 
@@ -96,9 +96,10 @@ default_rush: standard
 # Added AFTER all multipliers — you do not mark up postage for failure risk.
 # Keys match the delivery options already used in the WeBuilt queue sheet.
 delivery_options:
-  pickup:     {fee: 0,  label: "มารับด้วยตัวเอง (self pickup)"}
-  university: {fee: 20, label: "ส่งให้ที่มหาลัย (deliver at uni)"}
-  express:    {fee: 60, label: "ส่งด่วน (express)"}
+# `label` is English, `label_th` is Thai; receipts pick one by language.
+  pickup:     {fee: 0,  label: "Self pickup",         label_th: "มารับด้วยตัวเอง"}
+  university: {fee: 20, label: "Deliver at university", label_th: "ส่งให้ที่มหาลัย"}
+  express:    {fee: 60, label: "Express delivery",    label_th: "ส่งด่วน"}
 
 default_delivery: pickup
 
