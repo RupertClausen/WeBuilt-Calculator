@@ -36,8 +36,6 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from zoneinfo import ZoneInfo
-
 import yaml
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
@@ -309,7 +307,7 @@ def attach_thumbnails(payload: dict, thumbs: dict, quote_id: int | None) -> None
 
 def local_now() -> datetime:
     tz = config["receipt"].get("timezone", "Asia/Bangkok")
-    return datetime.now(ZoneInfo(tz))
+    return datetime.now(receipt_doc.zone(tz))
 
 
 def next_receipt_no(conn: sqlite3.Connection, when: datetime) -> str:

@@ -128,8 +128,7 @@ def test_title_follows_payment():
 
 def test_receipt_numbers_continue_after_the_sheet():
     from datetime import datetime
-    from zoneinfo import ZoneInfo
-    yymm = datetime.now(ZoneInfo("Asia/Bangkok")).strftime("%y%m")
+    yymm = datetime.now(receipt_doc.zone("Asia/Bangkok")).strftime("%y%m")
     floor = int((appmod.config["receipt"].get("next_number_floor") or {}).get(yymm, 1))
     a = save_upload(["orca_tiny_pla.gcode"])["receipt_no"]
     b = save_upload(["orca_tiny_pla.gcode"])["receipt_no"]
@@ -252,6 +251,24 @@ def test_thai_method_text_never_overclaims():
     text = " ".join(receipt_doc.build_view(row, quote, rc, "th")["method"])
     assert "ไม่ต้องจ่ายเพิ่ม" not in text
     print("  thai claims     same conditional wording as English")
+
+
+def test_time_zone_never_crashes():
+    """Windows has no built-in time zone database. With tzdata installed this
+    never triggers, but a broken install must still show Bangkok time."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfoNotFoundError
+    real = receipt_doc.ZoneInfo
+    def missing(name):
+        raise ZoneInfoNotFoundError(name)
+    receipt_doc.ZoneInfo = missing
+    try:
+        tz = receipt_doc.zone("Asia/Bangkok")
+        assert tz.utcoffset(None) == timedelta(hours=7)
+        assert receipt_doc.zone("Mars/Olympus").utcoffset(None) == timedelta(0)
+    finally:
+        receipt_doc.ZoneInfo = real
+    print("  time zone       no database -> Bangkok still UTC+7; unknown zone -> UTC")
 
 
 if __name__ == "__main__":

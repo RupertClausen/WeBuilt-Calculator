@@ -21,9 +21,9 @@ key falls back to English rather than failing.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from jinja2 import Environment, select_autoescape
@@ -33,6 +33,24 @@ _env = Environment(autoescape=select_autoescape(["html"]), trim_blocks=True,
 
 LOCALE_DIR = Path(__file__).parent / "locales"
 FALLBACK = "en"
+
+# Zones with no daylight saving, so a fixed offset is exactly right. Used
+# only if the time zone database is missing (normally the tzdata package
+# provides it), so a broken install shows the right time instead of crashing.
+FIXED_OFFSETS = {"Asia/Bangkok": 7, "UTC": 0}
+
+
+def zone(name: str):
+    """The time zone called `name`, never raising."""
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        hours = FIXED_OFFSETS.get(name)
+        if hours is None:
+            print(f"[webuilt] unknown time zone {name!r}; using UTC")
+            return timezone.utc
+        return timezone(timedelta(hours=hours), name)
+
 
 THAI_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
                "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
@@ -162,7 +180,7 @@ def build_view(
     order = bd["order"]
     plates = bd.get("plates", [])
     amount = {l["key"]: l["amount"] for l in quote["lines"]}
-    tz = ZoneInfo(rc.get("timezone", "Asia/Bangkok"))
+    tz = zone(rc.get("timezone", "Asia/Bangkok"))
     created = datetime.fromisoformat(row["created_at"]).astimezone(tz)
     paid = (row.get("payment_status") or "unpaid") == "paid"
     free_reprints = bool(rc.get("free_reprints", False))

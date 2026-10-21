@@ -8,3 +8,6 @@ uvicorn==0.52.4
 python-multipart==0.0.32
 PyYAML==6.0.3
 Jinja2==3.1.6
+# Windows has no built-in time zone database; Python's zoneinfo needs this
+# to know what Asia/Bangkok is. Harmless on Linux.
+tzdata==2026.5
