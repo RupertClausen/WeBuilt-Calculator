@@ -1,0 +1,116 @@
+# WeBuilt — filament roster
+#
+# This file changes often. It is deliberately separate from pricing.yaml
+# so you can edit prices without touching policy, and the server hot-reloads
+# it on save (no restart).
+#
+# IMPORTANT — cost vs price are two different columns on purpose:
+#
+#   cost_per_kg   what YOU actually pay the supplier. Used only for margin
+#                 reporting. Keep it honest even when you charge a flat rate,
+#                 otherwise you lose the ability to notice a material going
+#                 unprofitable after a supplier change.
+#
+#   charged       what the CUSTOMER pays, derived by `pricing_mode` below.
+#
+# ---------------------------------------------------------------------------
+# pricing_mode
+# ---------------------------------------------------------------------------
+#   flat_standard  One rate for every type in `standard_types`. Simplest to
+#                  quote. Safe because filament is only ~5-9% of a correct
+#                  price — but you MUST keep risk_multiplier accurate, because
+#                  that then carries the entire PLA-vs-ABS difficulty signal.
+#
+#   max_restocked  Per type, charge the highest cost among brands marked
+#                  `restocked: true`. Your current rule. Note it keys off
+#                  "brands we routinely restock", not "most expensive spool
+#                  in the room" — so one premium one-off purchase does not
+#                  permanently ratchet the type's price up.
+#
+#   per_brand      Charge the actual brand's cost plus `brand_markup`.
+#                  Most accurate, most work to quote.
+
+pricing_mode: flat_standard
+
+standard_types: [PLA, PETG, ABS]
+flat_standard_price_per_kg: 540
+
+brand_markup: 1.25          # used by per_brand mode only
+
+# ---------------------------------------------------------------------------
+# Materials
+# ---------------------------------------------------------------------------
+# density            g/cm3. Only needed if a slicer reports length not mass.
+# risk_multiplier    scales the printer's measured hazard rate. This is where
+#                    ABS being genuinely harder than PLA gets priced. Under
+#                    flat_standard pricing this is the ONLY place the
+#                    difference survives, so do not leave ABS at 1.0.
+# waste_factor       purge, brim, skirt, first-layer scrap. Note: Orca/Bambu
+#                    usually already include purge in reported grams, so keep
+#                    this small to avoid double counting.
+
+materials:
+
+  PLA:
+    density: 1.24
+    risk_multiplier: 1.0
+    waste_factor: 0.03
+    brands:
+      - {name: "Bambu Lab", cost_per_kg: 690, restocked: true}
+      - {name: "eSUN",      cost_per_kg: 450, restocked: true}
+      - {name: "ThreeBees", cost_per_kg: 390, restocked: true}
+      - {name: "Polymaker", cost_per_kg: 620, restocked: false}
+
+  PETG:
+    density: 1.27
+    # Stringier, more cleanup, more adhesion trouble than PLA
+    risk_multiplier: 1.25
+    waste_factor: 0.04
+    brands:
+      - {name: "Bambu Lab", cost_per_kg: 720, restocked: true}
+      - {name: "eSUN",      cost_per_kg: 480, restocked: true}
+      - {name: "ThreeBees", cost_per_kg: 399, restocked: true}
+
+  ABS:
+    density: 1.04
+    # Warps, needs the enclosure, fails noticeably more often.
+    # This is the number that replaces the old per-type price difference.
+    risk_multiplier: 1.8
+    waste_factor: 0.05
+    brands:
+      - {name: "Bambu Lab", cost_per_kg: 750, restocked: true}
+      - {name: "eSUN",      cost_per_kg: 520, restocked: true}
+      - {name: "ThreeBees", cost_per_kg: 420, restocked: true}
+
+  # --- specialty: priced per brand, never folded into the flat rate ---
+
+  TPU:
+    density: 1.21
+    risk_multiplier: 2.0
+    waste_factor: 0.06
+    standard: false
+    brands:
+      - {name: "eSUN", cost_per_kg: 890, restocked: true}
+
+  ASA:
+    density: 1.07
+    risk_multiplier: 1.9
+    waste_factor: 0.05
+    standard: false
+    brands:
+      - {name: "Bambu Lab", cost_per_kg: 850, restocked: true}
+
+  PA-CF:
+    density: 1.08
+    risk_multiplier: 2.4
+    waste_factor: 0.08
+    standard: false
+    brands:
+      - {name: "Bambu Lab", cost_per_kg: 1890, restocked: false}
+
+# Any filament type the parser finds that is not listed above falls back here.
+unknown_material:
+  density: 1.24
+  risk_multiplier: 1.5
+  waste_factor: 0.05
+  cost_per_kg: 700

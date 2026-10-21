@@ -1,0 +1,188 @@
+# WeBuilt — pricing policy
+# Every number here is a business decision, not a physical measurement.
+# Physical/measured values live in printers.yaml; filament prices in filaments.yaml.
+#
+# Currency: THB. All rates are per-hour unless stated.
+
+currency: "THB"
+
+# ---------------------------------------------------------------------------
+# Fixed fees
+# ---------------------------------------------------------------------------
+
+# Charged ONCE per order, no matter how many plates.
+# Covers: receiving the files, slicing, quoting, packing, handover admin,
+# AND the handling of the first plate. This is what stops a 5 g keychain
+# from being quoted at B8.
+setup_fee: 50
+
+# Charged for each plate AFTER the first. The first plate's handling is
+# already inside setup_fee, so:
+#     1 plate  -> 50
+#     2 plates -> 50 + 20  = 70
+#     3 plates -> 50 + 40  = 90
+#
+# Covers the extra bed prep, removal and restart that another plate costs.
+# A multi-file order counts plates across every file: three .gcode files is
+# three plates, and one .gcode.3mf holding two plates counts as two.
+#
+# This sits OUTSIDE the failure multiplier, as a flat handling charge. The
+# material and machine cost of an actual reprint is already carried by the
+# per-plate risk factor; headroom covers the small labour under-recovery.
+additional_plate_fee: 20
+
+# Your own time, for post-processing minutes entered on the quote
+# (support removal, sanding, gluing, painting).
+labour_rate_per_hour: 120
+
+# ---------------------------------------------------------------------------
+# Electricity
+# ---------------------------------------------------------------------------
+# THB per kWh. Per-printer wattage is in printers.yaml.
+electricity_tariff_per_kwh: 5.0
+
+# ---------------------------------------------------------------------------
+# Failure risk
+# ---------------------------------------------------------------------------
+# Replaces the old `hours ^ 1.5` time exponent.
+#
+#   p_success = p_start * exp(-hazard * material_risk * hours)
+#   risk_factor = 1 + (1/p_success - 1) * failure_consumed_fraction
+#
+# p_start and hazard are MEASURED per machine (printers.yaml).
+# material_risk is per filament type (filaments.yaml).
+# The two knobs below are policy.
+
+# On average, how much of a print is consumed before a failure is caught?
+#   1.0  = assume every failure wastes the whole print (most conservative)
+#   0.45 = typical; many failures show up early, a few at the very end
+#   0.0  = failures are free (never true)
+failure_consumed_fraction: 0.45
+
+# Ceiling on the failure allowance.
+#
+# The survival model is exponential, so on a long enough print the implied
+# reprint cost runs away: at hazard 0.015/h a 100 h print computes to a 22%
+# first-try success rate and a 2.6x risk factor. That is arithmetically
+# correct but commercially meaningless — past a point you do not quietly
+# price in three reprints, you go back to the customer and talk about
+# splitting the model or using a different machine.
+#
+# This caps the risk factor so very long jobs stay quotable. If you find
+# real quotes hitting the cap, that is a signal to either re-measure the
+# hazard (it is probably too high) or decline the job.
+max_risk_factor: 2.5
+
+# Flat safety margin applied AFTER the measured risk maths.
+# Kept separate on purpose: it lets you be cautious without corrupting
+# the measured failure statistics. 1.15 = +15%.
+headroom: 1.15
+
+# ---------------------------------------------------------------------------
+# Rush tiers
+# ---------------------------------------------------------------------------
+# Replaces the old (total_days / requested_days) formula, which was unbounded
+# and silently evaluated to zero whenever the two inputs matched.
+rush_tiers:
+  standard:  {multiplier: 1.00, label: "Standard"}
+  next_day:  {multiplier: 1.20, label: "Next day"}
+  same_day:  {multiplier: 1.50, label: "Same day"}
+
+default_rush: standard
+
+# ---------------------------------------------------------------------------
+# Delivery
+# ---------------------------------------------------------------------------
+# Added AFTER all multipliers — you do not mark up postage for failure risk.
+# Keys match the delivery options already used in the WeBuilt queue sheet.
+delivery_options:
+  pickup:     {fee: 0,  label: "มารับด้วยตัวเอง (self pickup)"}
+  university: {fee: 20, label: "ส่งให้ที่มหาลัย (deliver at uni)"}
+  express:    {fee: 60, label: "ส่งด่วน (express)"}
+
+default_delivery: pickup
+
+# ---------------------------------------------------------------------------
+# Rounding and floors
+# ---------------------------------------------------------------------------
+# Quotes round UP to the nearest step.
+rounding_step: 5
+
+# No order is quoted below this, whatever the maths says.
+minimum_price: 50
+
+# ---------------------------------------------------------------------------
+# Client profiles
+# ---------------------------------------------------------------------------
+# Replaces the old per-faculty time exponent (engineering 1.3, architecture
+# 1.5). That single knob was doing three different jobs at once, and they do
+# not scale the same way:
+#
+#   1. FILE PREP      mesh repair, rescaling, reorienting, fixing normals.
+#                     Your time. FIXED per job — a broken STL costs the same
+#                     20 minutes whether the print runs 2 hours or 20.
+#   2. FAILURE RISK   thin walls, unsupported overhangs, knife edges. These
+#                     genuinely fail more, and more the longer they run,
+#                     so this one IS duration-coupled.
+#   3. POST-PROCESSING  picking supports out of delicate lattice work without
+#                     snapping it. Scales with part complexity, not duration.
+#
+# The old exponent only expressed (2), and did it unboundedly. It charged
+# NOTHING extra below one hour — in fact it charged architecture LESS, since
+# h**1.5 < h**1.3 whenever h < 1 — and grew without limit on long prints.
+# File prep, the most reliably present cost of the three, was never charged.
+#
+# Each field below lands where the cost actually occurs:
+#
+#   prep_minutes         billed at labour_rate_per_hour. Flat, not scaled.
+#   risk_multiplier      multiplies the printer's hazard, exactly like a
+#                        material does. Compounds with duration and with the
+#                        machine's own curve shape, but stays bounded.
+#   postproc_multiplier  scales whatever post-processing minutes you enter.
+#   price_multiplier     blunt across-the-board markup. Left at 1.0 by
+#                        default — prefer the three above, which you can
+#                        actually justify to a customer line by line.
+#
+# NOTE ON FRAMING: these are defaults, not verdicts. The charge is driven by
+# `prep_minutes`, which the operator can override per job. An architecture
+# student who submits a clean, manifold, correctly-scaled file should be
+# dialled down to the engineering preset; an engineering student who sends a
+# non-manifold SketchUp export should be dialled up. Charging for observable
+# file condition is the same revenue, defensible line by line ("your file
+# needed 25 minutes of repair"), and it does not become an "architecture tax"
+# story in a small campus market.
+
+client_profiles:
+
+  engineering:
+    label: "Engineering"
+    prep_minutes: 5           # usually print-ready; a quick look over
+    risk_multiplier: 1.0
+    postproc_multiplier: 1.0
+    price_multiplier: 1.0
+
+  architecture:
+    label: "Architecture"
+    prep_minutes: 25          # mesh repair, rescale, reorient, wall thickening
+    risk_multiplier: 1.45     # thin walls and overhangs genuinely fail more
+    postproc_multiplier: 1.6  # delicate supports, easy to snap on removal
+    price_multiplier: 1.0
+
+  general:
+    label: "General / staff"
+    prep_minutes: 10
+    risk_multiplier: 1.1
+    postproc_multiplier: 1.0
+    price_multiplier: 1.0
+
+  internal:
+    label: "Internal / WeBuilt"
+    prep_minutes: 0
+    risk_multiplier: 1.0
+    postproc_multiplier: 1.0
+    price_multiplier: 0.0     # at cost
+
+default_client_profile: general
+
+# Billed at labour_rate_per_hour, same as post-processing.
+# Set per quote to override the profile default.

@@ -1,0 +1,104 @@
+# WeBuilt — printer roster
+#
+# Each machine carries its OWN failure model. Not just its own numbers —
+# its own curve shape and its own per-material risk table. Two printers on
+# the same bench genuinely behave differently, and an enclosed machine
+# running ABS is not doing the same job as an open-frame one.
+#
+# ---------------------------------------------------------------------------
+# The model
+# ---------------------------------------------------------------------------
+#
+#   p_success = p_start * exp( -(hazard * material_risk * hours) ** shape )
+#
+#   p_start   Probability of clearing the first layer. Does NOT scale with
+#             print length, which is why it sits outside the exponential.
+#             Measure: 1 - (prints that died in roughly the first 10 min
+#                           / total starts)
+#
+#   hazard    Per-hour chance of a late failure, after the first layer.
+#             Measure: (prints that died after the first 10 min)
+#                      / (total running hours)
+#
+#   shape     The Weibull exponent. THIS is what makes the model differ
+#             between machines rather than just the constants:
+#               1.0  constant hazard. Failures arrive at a steady rate.
+#                    Memoryless. Safe default for a machine you have not
+#                    characterised yet.
+#               >1   hazard RISES with print length. Machines that heat-soak,
+#                    drift out of tune, or warp big parts late in a long run.
+#                    Long jobs on these are disproportionately risky.
+#               <1   hazard FALLS with print length. Trouble shows up early
+#                    and a print past hour two will almost certainly finish.
+#                    Runout sensors and good first-layer detection do this.
+#             To fit it: bucket your failures by the hour they occurred. Flat
+#             histogram -> 1.0. Rising -> above 1. Front-loaded -> below 1.
+#
+#   material_risk   Per-machine multiplier on hazard, per filament type.
+#             Overrides the fleet default in filaments.yaml. This is where an
+#             enclosure earns its keep: the same ABS spool is a 1.1x job in a
+#             heated chamber and a 2.5x job on an open frame.
+#
+#   failure_consumed_fraction  Optional per-machine override of the fleet
+#             policy in pricing.yaml. A machine that detects failures early
+#             wastes less per failure, so it should charge less for risk.
+#
+# Set `measured: false` until you have real numbers, so quotes resting on
+# guesses say so.
+#
+# ---------------------------------------------------------------------------
+# Commercial
+# ---------------------------------------------------------------------------
+#   rate_per_hour         what you charge for machine time (capital
+#                         depreciation over expected service hours + margin)
+#   maintenance_per_hour  consumables amortised per HOUR: nozzles, belts,
+#                         PTFE, bed sheets. Not a percentage of filament cost.
+
+printers:
+
+  normal:
+    label: "Normal"
+    model: "Bambu Lab P1S"
+    build_volume_mm: [256, 256, 256]
+
+    power_w: 150
+    rate_per_hour: 15
+    maintenance_per_hour: 2.0
+
+    # --- failure model ---
+    p_start: 0.97
+    hazard: 0.015
+    shape: 1.0                    # constant hazard until you measure otherwise
+    failure_consumed_fraction: 0.45
+    material_risk:
+      PLA:  1.0
+      PETG: 1.2
+      ABS:  1.6                   # enclosed, so ABS is manageable here
+      TPU:  2.2                   # bowden-ish path, flexibles are fiddly
+    measured: false               # TODO set true once you have real counts
+
+  large:
+    label: "Large"
+    model: "Large format"
+    build_volume_mm: [400, 400, 450]
+
+    power_w: 250
+    rate_per_hour: 25
+    maintenance_per_hour: 3.5
+
+    # --- failure model ---
+    # Bigger bed, longer jobs, more to go wrong late in a print, so the
+    # hazard is both higher AND rising rather than flat.
+    p_start: 0.94
+    hazard: 0.025
+    shape: 1.3                    # risk accelerates on long runs
+    failure_consumed_fraction: 0.55
+    material_risk:
+      PLA:  1.0
+      PETG: 1.3
+      ABS:  2.1                   # large ABS parts warp off the bed late
+      TPU:  2.5
+    measured: false
+
+# Used when a sliced file names a printer model we do not recognise.
+fallback_printer: normal

@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# The order log holds customer names, contacts and payment records.
+# It must never enter version history. SQLite's side files can carry the
+# same data, so they are excluded too.
+orders.db
+orders.db-*
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Per-machine Claude Code settings
+.claude/settings.local.json

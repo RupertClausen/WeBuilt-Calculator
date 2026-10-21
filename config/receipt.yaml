@@ -1,0 +1,69 @@
+# WeBuilt — receipt and quotation settings
+#
+# Shop identity and the terms printed on every document. Write these in Thai,
+# English, or both; the renderer prints them as-is.
+
+business:
+  name: "WeBuilt 3D Printing Service"
+  tagline: "FDM printing for students and makers"
+  address: ""                 # TODO e.g. building / campus / LINE pickup point
+  contact:
+    line: ""                  # TODO LINE ID
+    phone: ""
+    email: "webuilt.tech@gmail.com"
+  tax_id: ""                  # leave empty if not VAT registered
+
+# Receipt numbers follow the queue sheet: WB-YYMM-NNN, restarting each month.
+receipt_prefix: "WB"
+
+# A document is titled "Quotation" until payment is recorded, then "Receipt".
+# Handing someone a "receipt" for a job they have not paid for is wrong in
+# both directions, so the title follows the payment status.
+payment_methods: ["PromptPay", "Bank transfer", "Cash"]
+
+timezone: "Asia/Bangkok"
+
+# ---------------------------------------------------------------------------
+# What the customer can see
+# ---------------------------------------------------------------------------
+# Transparency here means showing what the customer is paying for and how
+# each number was computed. It does NOT mean showing your supplier costs or
+# margin: those are your numbers, and printing them hands over your
+# negotiating position without telling the customer anything about the job.
+# The renderer never prints cost_per_kg, estimated cost, or margin.
+#
+# The client profile name (Engineering / Architecture) is also not printed.
+# The customer sees the effect, in minutes of file preparation and the
+# estimated success rate of each plate, which is the part they can check and
+# act on. A student who sends a cleaner file sees that line shrink.
+show_rates: true              # print the unit rate behind every line
+show_per_plate_table: true
+show_method_section: true     # the "how this price was calculated" block
+
+# Whether paying the failure allowance buys free reprints for print
+# failures. The "how this price is calculated" text only makes that promise
+# when this is true, so it can never contradict your terms below.
+free_reprints: true
+
+# ---------------------------------------------------------------------------
+# Terms
+# ---------------------------------------------------------------------------
+# The failure allowance is a charge for reprint risk. If the customer pays
+# for it, the document has to say what it buys, or the line has no meaning.
+# Review these before using them. They are placeholders.
+terms:
+  - "The failure allowance covers reprints caused by a print failure on our side. If a part fails or comes out defective because of printing, we reprint it at no extra charge."
+  - "Changes to the design, scale, or material after printing starts are quoted as a new job."
+  - "Print times and filament weights are the slicer's estimates. The quoted price is fixed and does not change if the actual print runs longer or shorter."
+  - "Quotations are valid for 7 days. Prices follow the filament roster on the date of the quote."
+
+footer: "Thank you for printing with WeBuilt."
+
+# ---------------------------------------------------------------------------
+# Numbering seed
+# ---------------------------------------------------------------------------
+# The queue sheet already used WB-2610-001 to WB-2610-009 before this tool
+# existed. Without a seed, the tool would issue WB-2610-001 again. For any
+# month listed here, numbering starts at no lower than this value.
+next_number_floor:
+  "2610": 10

@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WeBuilt Quote</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #15171a; --muted: #6b7280; --line: #e5e7eb;
+    --panel: #f8f9fb; --accent: #2563eb; --accent-fg: #ffffff;
+    --warn-bg: #fff7ed; --warn-fg: #9a3412; --warn-line: #fed7aa;
+    --ok: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1115; --fg: #e6e8eb; --muted: #9aa1ab; --line: #272b33;
+      --panel: #171a20; --accent: #3b82f6; --accent-fg: #ffffff;
+      --warn-bg: #2a1d10; --warn-fg: #fdba74; --warn-line: #7c2d12;
+      --ok: #4ade80;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --fg: #e6e8eb; --muted: #9aa1ab; --line: #272b33;
+    --panel: #171a20; --accent: #3b82f6; --accent-fg: #ffffff;
+    --warn-bg: #2a1d10; --warn-fg: #fdba74; --warn-line: #7c2d12;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+
+  #drop {
+    border: 2px dashed var(--line); border-radius: 12px; padding: 36px 20px;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+    background: var(--panel);
+  }
+  #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+  #drop strong { display: block; margin-bottom: 4px; }
+  #drop span { color: var(--muted); font-size: 13px; }
+
+  .controls {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px; margin: 20px 0;
+  }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  select, input {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit;
+  }
+  button {
+    background: var(--accent); color: var(--accent-fg); border: 0;
+    padding: 10px 18px; border-radius: 8px; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+
+  .total {
+    display: flex; align-items: baseline; gap: 12px;
+    margin: 24px 0 8px; padding-bottom: 16px; border-bottom: 1px solid var(--line);
+  }
+  .total .amount { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
+  .total .meta { color: var(--muted); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.amt { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td .note { display: block; color: var(--muted); font-size: 12px; }
+  tr.sum td { font-weight: 700; border-bottom: 0; }
+
+  .warn {
+    background: var(--warn-bg); color: var(--warn-fg);
+    border: 1px solid var(--warn-line); border-radius: 8px;
+    padding: 10px 12px; margin: 16px 0; font-size: 13px;
+  }
+  .warn ul { margin: 4px 0 0; padding-left: 18px; }
+  .err { color: #dc2626; }
+
+  details { margin-top: 20px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; overflow: auto; font-size: 12px; margin-top: 10px;
+  }
+  .hidden { display: none; }
+  .filerow {
+    display: grid; grid-template-columns: 1fr 90px 36px; gap: 8px;
+    align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .filerow .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filerow .fsize { display: block; color: var(--muted); font-size: 12px; }
+  .filerow button {
+    background: none; border: 1px solid var(--line); color: var(--muted);
+    padding: 0; border-radius: 8px; font-size: 18px; line-height: 1; height: 32px;
+  }
+  #filelist { margin-top: 12px; }
+  #filelist .head { display: flex; justify-content: space-between;
+                    font-size: 12px; color: var(--muted); padding-bottom: 4px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .tab {
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    color: var(--muted); padding: 8px 14px; font: inherit; font-weight: 600;
+    cursor: pointer; border-radius: 0;
+  }
+  .tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+  .matrow { display: grid; grid-template-columns: 1fr 110px 36px; gap: 8px; margin-bottom: 8px; }
+  .matrow button {
+    background: none; border: 1px solid var(--line); color: var(--muted);
+    padding: 0; border-radius: 8px; font-size: 18px; line-height: 1;
+  }
+  .addmat {
+    background: none; border: 1px dashed var(--line); color: var(--muted);
+    padding: 7px 12px; font-size: 13px; font-weight: 500; width: 100%;
+  }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 12px; padding: 18px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .rlink { margin-left:auto; align-self:center; font-size:13px; font-weight:600;
+           color:var(--accent); text-decoration:none; border:1px solid var(--line);
+           border-radius:8px; padding:6px 12px; white-space:nowrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 12px; }
+  .chip { background: var(--panel); border: 1px solid var(--line);
+          border-radius: 999px; padding: 3px 10px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>WeBuilt Quote</h1>
+  <div class="sub">Sliced files from OrcaSlicer or Bambu Studio — <code>.gcode</code> or <code>.gcode.3mf</code>. Add one file per plate when the parts do not fit on one bed.</div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" id="tab-upload" role="tab" aria-selected="true">Upload sliced file</button>
+    <button class="tab" id="tab-manual" role="tab" aria-selected="false">Manual entry</button>
+  </div>
+
+  <div id="panel-upload">
+    <div id="drop">
+      <strong>Drop sliced files here</strong>
+      <span>or click to choose — one per plate</span>
+      <input type="file" id="file" class="hidden" multiple accept=".gcode,.gco,.3mf,.g">
+    </div>
+    <div id="filelist"></div>
+  </div>
+
+  <div id="panel-manual" class="panel hidden">
+    <label>Filament</label>
+    <div id="materials"></div>
+    <button class="addmat" id="addmat" type="button">+ Add another filament</button>
+    <div class="controls" style="margin-bottom:0">
+      <div><label for="m-hours">Print time — hours</label>
+        <input type="number" id="m-hours" min="0" step="1" value="0"></div>
+      <div><label for="m-minutes">minutes</label>
+        <input type="number" id="m-minutes" min="0" step="1" value="0"></div>
+      <div><label for="m-label">Job reference</label>
+        <input type="text" id="m-label" placeholder="WB-… or customer"></div>
+    </div>
+    <div class="hint">Everything a sliced file would have told us. The options below apply to both modes.</div>
+  </div>
+
+  <div class="controls">
+    <div><label for="printer">Printer</label><select id="printer"></select></div>
+    <div><label for="rush">Turnaround</label><select id="rush"></select></div>
+    <div><label for="delivery">Delivery</label><select id="delivery"></select></div>
+    <div id="plates-field"><label for="plates">Plates</label><input type="number" id="plates" min="1" value="1"></div>
+    <div><label for="postproc">Post-processing (min)</label><input type="number" id="postproc" min="0" value="0"></div>
+    <div><label for="profile">Client</label><select id="profile"></select></div>
+    <div><label for="prep">File prep (min)</label><input type="number" id="prep" min="0" placeholder="profile default"></div>
+  </div>
+  <div class="hint" id="profile-hint"></div>
+
+  <details id="cust" style="margin:14px 0 4px">
+    <summary>Customer details for the receipt</summary>
+    <div class="controls" style="margin-top:10px">
+      <div><label for="c-name">Customer name</label><input type="text" id="c-name" placeholder="K'…"></div>
+      <div><label for="c-contact">Contact</label><input type="text" id="c-contact" placeholder="LINE / phone"></div>
+      <div><label for="c-receipt">Receipt no. (optional)</label><input type="text" id="c-receipt" placeholder="auto: WB-YYMM-NNN"></div>
+    </div>
+    <div><label for="c-notes">Note on the receipt</label><input type="text" id="c-notes" placeholder="e.g. pick up at building 81"></div>
+  </details>
+
+  <button id="go" disabled>Quote</button>
+
+  <div id="out"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let chosen = [], opts = null, mode = 'upload';
+
+async function loadOptions() {
+  opts = await (await fetch('/api/options')).json();
+  const fill = (el, items, def) => {
+    el.innerHTML = items.map(i =>
+      `<option value="${i.id}" ${i.id===def?'selected':''}>${i.label}</option>`).join('');
+  };
+  fill($('#printer'), opts.printers, opts.default_printer);
+  fill($('#rush'), opts.rush_tiers, opts.default_rush);
+  fill($('#delivery'), opts.delivery_options, opts.default_delivery);
+  fill($('#profile'), opts.client_profiles, opts.default_client_profile);
+  addMaterialRow();
+  showProfileHint();
+  setMode('upload');
+}
+loadOptions();
+
+// --- client profile ---------------------------------------------------
+function currentProfile() {
+  return (opts?.client_profiles || []).find(p => p.id === $('#profile').value);
+}
+function showProfileHint() {
+  const p = currentProfile();
+  if (!p) return;
+  const bits = [`${p.prep_minutes} min file prep`];
+  if (p.risk_multiplier !== 1) bits.push(`risk ×${p.risk_multiplier}`);
+  if (p.postproc_multiplier !== 1) bits.push(`post-processing ×${p.postproc_multiplier}`);
+  if (p.price_multiplier !== 1) bits.push(`price ×${p.price_multiplier}`);
+  $('#profile-hint').textContent =
+    `${p.label}: ${bits.join(', ')}. Override the prep minutes per job if the file is better or worse than usual.`;
+  $('#prep').placeholder = `${p.prep_minutes} (default)`;
+}
+$('#profile').onchange = showProfileHint;
+
+// --- tabs -------------------------------------------------------------
+function setMode(next) {
+  mode = next;
+  $('#tab-upload').setAttribute('aria-selected', next === 'upload');
+  $('#tab-manual').setAttribute('aria-selected', next === 'manual');
+  $('#panel-upload').classList.toggle('hidden', next !== 'upload');
+  $('#panel-manual').classList.toggle('hidden', next !== 'manual');
+  // In upload mode each file carries its own copies count, so a single
+  // order-wide "plates" number would be ambiguous.
+  $('#plates-field').classList.toggle('hidden', next === 'upload');
+  updateGo();
+}
+$('#tab-upload').onclick = () => setMode('upload');
+$('#tab-manual').onclick = () => setMode('manual');
+
+// --- manual filament rows --------------------------------------------
+function addMaterialRow(type, grams) {
+  const row = document.createElement('div');
+  row.className = 'matrow';
+  const mats = opts?.materials || ['PLA', 'PETG', 'ABS'];
+  row.innerHTML = `
+    <select class="m-type">${mats.map(m =>
+      `<option ${m===(type||'PLA')?'selected':''}>${m}</option>`).join('')}</select>
+    <input type="number" class="m-grams" min="0" step="0.01"
+           placeholder="grams" value="${grams ?? ''}">
+    <button type="button" title="Remove">×</button>`;
+  row.querySelector('button').onclick = () => {
+    if ($('#materials').children.length > 1) { row.remove(); updateGo(); }
+  };
+  row.querySelector('.m-grams').oninput = updateGo;
+  $('#materials').appendChild(row);
+  updateGo();
+}
+$('#addmat').onclick = () => addMaterialRow();
+
+function manualFilaments() {
+  return [...document.querySelectorAll('.matrow')].map(r => ({
+    type: r.querySelector('.m-type').value,
+    grams: parseFloat(r.querySelector('.m-grams').value),
+  })).filter(f => f.grams > 0);
+}
+function manualReady() {
+  const mins = (+$('#m-hours').value || 0) * 60 + (+$('#m-minutes').value || 0);
+  return manualFilaments().length > 0 && mins > 0;
+}
+function updateGo() {
+  $('#go').disabled = mode === 'upload' ? chosen.length === 0 : !manualReady();
+}
+['#m-hours', '#m-minutes'].forEach(id => { $(id).oninput = updateGo; });
+
+const drop = $('#drop'), fileInput = $('#file');
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => {
+  e.preventDefault(); drop.classList.remove('over');
+  addFiles(e.dataTransfer.files);
+};
+fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ''; };
+
+// Each entry is one plate. Parts that do not fit on one bed arrive as
+// separate sliced files, and each is priced on its own duration.
+function addFiles(list) {
+  for (const f of list) {
+    if (!chosen.some(c => c.file.name === f.name && c.file.size === f.size))
+      chosen.push({ file: f, copies: 1 });
+  }
+  renderFiles();
+}
+
+function renderFiles() {
+  const el = $('#filelist');
+  if (!chosen.length) {
+    el.innerHTML = '';
+    drop.querySelector('strong').textContent = 'Drop sliced files here';
+    drop.querySelector('span').textContent = 'or click to choose — one per plate';
+    updateGo();
+    return;
+  }
+  el.innerHTML = `<div class="head"><span>${chosen.length} file${
+    chosen.length > 1 ? 's' : ''}</span><span>copies</span></div>`;
+  chosen.forEach((c, i) => {
+    const row = document.createElement('div');
+    row.className = 'filerow';
+    row.innerHTML = `
+      <div class="fname">${c.file.name}
+        <span class="fsize">${(c.file.size / 1024).toFixed(0)} KB</span></div>
+      <input type="number" min="1" value="${c.copies}" class="fcopies">
+      <button type="button" title="Remove">×</button>`;
+    row.querySelector('.fcopies').oninput = e => {
+      c.copies = Math.max(1, +e.target.value || 1);
+    };
+    row.querySelector('button').onclick = () => { chosen.splice(i, 1); renderFiles(); };
+    el.appendChild(row);
+  });
+  drop.querySelector('strong').textContent = 'Drop more sliced files here';
+  drop.querySelector('span').textContent = 'or click to add — one per plate';
+  updateGo();
+}
+
+function sharedOptions() {
+  const o = {
+    printer: $('#printer').value,
+    rush: $('#rush').value,
+    delivery: $('#delivery').value,
+    ...(mode === 'manual' ? { plates: +$('#plates').value || 1 } : {}),
+    postproc_minutes: +$('#postproc').value || 0,
+    client_profile: $('#profile').value,
+  };
+  if ($('#prep').value !== '') o.prep_minutes = +$('#prep').value;
+  for (const [k, id] of [['customer_name', '#c-name'], ['customer_contact', '#c-contact'],
+                         ['notes', '#c-notes'], ['receipt_no', '#c-receipt']]) {
+    const val = $(id).value.trim();
+    if (val) o[k] = val;
+  }
+  return o;
+}
+
+$('#go').onclick = async () => {
+  const btn = $('#go');
+  btn.disabled = true; btn.textContent = 'Pricing…';
+  let req;
+  if (mode === 'upload') {
+    const fd = new FormData();
+    for (const c of chosen) {
+      fd.append('files', c.file);
+      fd.append('copies', c.copies);
+    }
+    for (const [k, v] of Object.entries(sharedOptions())) fd.append(k, v);
+    req = fetch('/api/quote', { method: 'POST', body: fd });
+  } else {
+    req = fetch('/api/quote/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filaments: manualFilaments(),
+        hours: +$('#m-hours').value || 0,
+        minutes: +$('#m-minutes').value || 0,
+        label: $('#m-label').value || null,
+        ...sharedOptions(),
+      }),
+    });
+  }
+  try {
+    const res = await req;
+    const data = await res.json();
+    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail
+      : JSON.stringify(data.detail) || 'Request failed');
+    render(data);
+  } catch (err) {
+    $('#out').innerHTML = `<div class="warn err">${err.message}</div>`;
+  } finally {
+    btn.textContent = 'Quote'; updateGo();
+  }
+};
+
+function money(n, cur) {
+  const sign = n < 0 ? '-' : '';
+  return sign + (cur === 'THB' ? '฿' : cur + ' ') + Math.abs(n).toFixed(2);
+}
+
+function render(d) {
+  const cur = d.currency, b = d.breakdown;
+  const rows = d.lines.filter(l => Math.abs(l.amount) > 0.004).map(l => `
+    <tr><td>${l.label}${l.note ? `<span class="note">${l.note}</span>` : ''}</td>
+        <td class="amt">${money(l.amount, cur)}</td></tr>`).join('');
+
+  const warn = d.warnings.length
+    ? `<div class="warn"><strong>Check these</strong><ul>${
+        d.warnings.map(w => `<li>${w}</li>`).join('')}</ul></div>` : '';
+
+  $('#out').innerHTML = `
+    <div class="total">
+      <div class="amount">${money(d.total, cur)}</div>
+      ${d.receipt_url ? `<a href="${d.receipt_url}" target="_blank" class="rlink">Open ${d.receipt_no} →</a>` : ''}
+      <div class="meta">${b.order.grams_total} g · ${b.order.hours_total.toFixed(2)} h ·
+        ${b.order.plates} plate${b.order.plates > 1 ? 's' : ''}</div>
+    </div>
+    ${warn}
+    <table>${rows}
+      <tr class="sum"><td>Total</td><td class="amt">${money(d.total, cur)}</td></tr>
+    </table>
+    ${b.plates.length > 1 ? `
+      <table style="margin-top:18px">
+        <tr><td colspan="2"><span class="note">Each plate is risked on its own duration</span></td></tr>
+        ${b.plates.map(pl => `<tr><td>${pl.label}
+          <span class="note">${pl.grams} g · ${pl.hours.toFixed(2)} h · ${pl.printer}${
+            pl.copies > 1 ? ` · ×${pl.copies}` : ''} · risk ×${pl.risk.factor.toFixed(3)}</span></td>
+          <td class="amt">${money(pl.subtotal, cur)}</td></tr>`).join('')}
+      </table>` : ''}
+    <div class="chips">
+      <span class="chip">${b.order.plates} plate${b.order.plates > 1 ? 's' : ''} from ${b.order.files} file${b.order.files > 1 ? 's' : ''}</span>
+      <span class="chip">${(Math.min(...b.plates.map(x => x.risk.p_success_first_try)) * 100).toFixed(1)}% first-try success${b.plates.length > 1 ? ' (worst plate)' : ''}</span>
+      <span class="chip">${b.client.label}</span>
+      <span class="chip">margin ${b.margin.margin_pct}%</span>
+      <span class="chip">parsed via ${d.file.parsed_by}</span>
+    </div>
+    <details><summary>Full breakdown (JSON)</summary>
+      <pre>${JSON.stringify(d, null, 2)}</pre></details>`;
+}
+</script>
+</body>
+</html>
