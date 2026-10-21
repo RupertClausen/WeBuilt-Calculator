@@ -11,7 +11,7 @@ python3 -m uvicorn app:app --reload --port 8000
 To try things without adding to the real order log, point the server at a
 throwaway database: `WEBUILT_DB=/tmp/trial.db python3 -m uvicorn app:app --port 8001`.
 
-Run the tests with `python3 tests/run_all.py` (42 tests, 4 suites). They
+Run the tests with `python3 tests/run_all.py` (52 tests, 5 suites). They
 use a throwaway database and never touch `orders.db`.
 
 ---
@@ -156,6 +156,32 @@ removal and restart.
 The ฿20 sits **outside** the failure multiplier, as a flat handling charge.
 The material and machine cost of an actual reprint is already carried by that
 plate's risk factor; headroom absorbs the small labour under-recovery.
+
+## Plate pictures
+
+Each plate shows a picture, on the quote page and on the receipt: the same
+image your printer's screen shows. The calculator draws nothing itself. The
+slicer renders that picture when you slice and embeds it in the file, and the
+calculator just extracts it.
+
+- **`.gcode.3mf`:** each plate's own `Metadata/plate_<n>.png`, matched by plate
+  number, so a three-plate export gets three different pictures.
+- **Plain `.gcode`:** the `; thumbnail begin …` block. When a file holds several
+  sizes, the largest is used.
+
+Only PNG and JPEG are kept, checked by the image bytes rather than the label
+in the file, and up to 1 MB each. Orca can also write QOI thumbnails, which
+browsers can't display, so those are skipped. A file with no usable picture
+still quotes normally and shows a placeholder.
+
+**If a plain `.gcode` from Orca shows no picture,** turn on thumbnails in the
+printer profile (Printer settings → Basic information → G-code thumbnails, for
+example `300x300/PNG`) and re-slice. Bambu Studio and `.gcode.3mf` exports
+include them already.
+
+Saved quotes keep their pictures in a separate `plate_thumbnails` table in
+`orders.db`, not inside the quote record, and they are deleted with the quote.
+A quote that isn't saved returns the pictures inline instead.
 
 ## Client profiles — replacing the faculty exponent
 
@@ -400,6 +426,7 @@ total  = round_up(max(order + delivery_fee, minimum))
 | `GET /api/orders` | quote history |
 | `POST /api/orders/{id}/outcome` | mark `completed` / `failed` |
 | `POST /api/orders/{id}/payment` | `status=paid\|unpaid`, `method` |
+| `GET /api/orders/{id}/plates/{n}/thumbnail` | that plate's picture |
 | `GET /receipt/{id}` · `/receipt/{id}.txt` · `/api/receipt/{id}` | quotation / receipt; add `?lang=th` or `?lang=en` |
 
 ## Parser

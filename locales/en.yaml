@@ -29,6 +29,7 @@ col_time: "Time"
 col_runs: "Runs"
 col_success: "First-time success"
 col_subtotal: "Subtotal"
+no_picture: "No picture in the file"
 plates_note: "Plate subtotals include filament, machine time, electricity, wear and that plate's failure allowance, before order-level charges."
 
 section_method: "How this price is calculated"

@@ -18,6 +18,8 @@ plate must never be flattened into two 11 h plates.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import re
 import zipfile
@@ -46,6 +48,10 @@ class SlicedJob:
     plate_index: int = 1      # which plate of its source file
     source: str = ""          # which parser produced this
     warnings: list[str] = field(default_factory=list)
+    # The plate picture the slicer embedded — the same image the printer's
+    # screen shows. None when the file carries no usable one.
+    thumbnail: bytes | None = field(default=None, repr=False)
+    thumbnail_mime: str | None = None
 
     @property
     def hours(self) -> float:
@@ -88,6 +94,83 @@ def _split_multi(raw: str) -> list[str]:
     """Slicers list per-extruder values as 'a;b' or 'a,b'."""
     parts = re.split(r"[;,]", raw)
     return [p.strip() for p in parts if p.strip()]
+
+
+# ---------------------------------------------------------------------------
+# thumbnails
+# ---------------------------------------------------------------------------
+# Slicers embed a picture of each plate at slice time; printers just display
+# it. Only PNG and JPEG are kept, because those are what a browser can show.
+# Orca can also write QOI, which browsers cannot display, so it is skipped.
+# The type is decided by the bytes, never by the label in the file.
+
+MAX_THUMBNAIL_BYTES = 1024 * 1024
+
+
+def image_mime(data: bytes | None) -> str | None:
+    if not data:
+        return None
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    return None
+
+
+def _usable(data: bytes | None) -> tuple[bytes, str] | None:
+    mime = image_mime(data)
+    if mime and len(data) <= MAX_THUMBNAIL_BYTES:
+        return data, mime
+    return None
+
+
+def thumbnail_from_3mf(zf: zipfile.ZipFile, plate_index: int) -> tuple[bytes, str] | None:
+    """Bambu Studio and Orca store `Metadata/plate_<n>.png` per plate, the
+    picture the printer shows. Fall back to the small or top-down versions."""
+    names = set(zf.namelist())
+    for name in (f"Metadata/plate_{plate_index}.png",
+                 f"Metadata/plate_{plate_index}_small.png",
+                 f"Metadata/top_{plate_index}.png"):
+        if name in names:
+            info = zf.getinfo(name)
+            if info.file_size > MAX_THUMBNAIL_BYTES:
+                continue
+            hit = _usable(zf.read(name))
+            if hit:
+                return hit
+    return None
+
+
+_THUMB_BEGIN = re.compile(
+    r"^;\s*thumbnail(?:_(PNG|JPG|JPEG|QOI))?\s+begin\s+(\d+)\s*x\s*(\d+)", re.I)
+_THUMB_END = re.compile(r"^;\s*thumbnail(?:_\w+)?\s+end", re.I)
+
+
+def thumbnails_from_gcode(lines: list[str]) -> list[tuple[int, bytes, str]]:
+    """Every displayable `; thumbnail begin WxH …` block, as (pixels, bytes, mime)."""
+    found = []
+    buf: list[str] | None = None
+    area = 0
+    for line in lines:
+        if buf is None:
+            m = _THUMB_BEGIN.match(line)
+            if m:
+                buf, area = [], int(m.group(2)) * int(m.group(3))
+            continue
+        if _THUMB_END.match(line):
+            try:
+                data = base64.b64decode("".join(buf), validate=False)
+            except (binascii.Error, ValueError):
+                data = None
+            hit = _usable(data)
+            if hit:
+                found.append((area, *hit))
+            buf = None
+            continue
+        buf.append(line.lstrip(";").strip())
+        if sum(map(len, buf)) > MAX_THUMBNAIL_BYTES * 4 // 3 + 4:
+            buf = None          # too big to keep; stop collecting this block
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -136,14 +219,18 @@ def parse_3mf(data: bytes) -> list[SlicedJob]:
         if not filaments:
             continue
 
+        plate_index = int(meta.get("index", index) or index)
+        thumb = thumbnail_from_3mf(zf, plate_index)
         jobs.append(SlicedJob(
             filaments=_merge_same_type(filaments),
             seconds=seconds,
             printer_model=meta.get("printer_model_id"),
             plates=1,
-            plate_index=int(meta.get("index", index) or index),
+            plate_index=plate_index,
             source="3mf/slice_info.config",
             warnings=warnings,
+            thumbnail=thumb[0] if thumb else None,
+            thumbnail_mime=thumb[1] if thumb else None,
         ))
 
     if not jobs:
@@ -177,9 +264,18 @@ _GRAM_KEYS = (
 
 
 def parse_gcode(text: str) -> list[SlicedJob]:
+    lines = text.splitlines()
     kv: dict[str, str] = {}
-    for line in text.splitlines():
+    in_thumb = False
+    for line in lines:
         if not line.startswith(";"):
+            continue
+        # base64 lines can end in "=" and would otherwise read as settings
+        if in_thumb:
+            in_thumb = not _THUMB_END.match(line)
+            continue
+        if _THUMB_BEGIN.match(line):
+            in_thumb = True
             continue
         m = _KV_RE.match(line)
         if m:
@@ -237,6 +333,10 @@ def parse_gcode(text: str) -> list[SlicedJob]:
 
     printer_model = kv.get("printer_model") or kv.get("printer_settings_id")
 
+    # Slicers often embed several sizes; the largest looks best on a receipt.
+    thumbs = sorted(thumbnails_from_gcode(lines), key=lambda t: t[0])
+    best = thumbs[-1] if thumbs else None
+
     return [SlicedJob(
         filaments=_merge_same_type(filaments),
         seconds=seconds,
@@ -244,6 +344,8 @@ def parse_gcode(text: str) -> list[SlicedJob]:
         plates=1,
         source="gcode comments",
         warnings=warnings,
+        thumbnail=best[1] if best else None,
+        thumbnail_mime=best[2] if best else None,
     )]
 
 

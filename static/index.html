@@ -123,6 +123,17 @@
   .rlink { margin-left:auto; align-self:center; font-size:13px; font-weight:600;
            color:var(--accent); text-decoration:none; border:1px solid var(--line);
            border-radius:8px; padding:6px 12px; white-space:nowrap; }
+  .plates-head { margin:20px 0 8px; font-size:12px; color:var(--muted); }
+  .plate-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; }
+  .plate-card { border:1px solid var(--line); border-radius:10px; overflow:hidden;
+                background:var(--panel); display:flex; flex-direction:column; }
+  .plate-card img, .plate-card .noimg { width:100%; aspect-ratio:1; object-fit:contain;
+                background:#2a2d33; display:block; }
+  .plate-card .noimg { display:flex; align-items:center; justify-content:center;
+                color:var(--muted); font-size:12px; background:var(--bg); }
+  .pc-body { padding:8px 10px 10px; font-size:13px; }
+  .pc-name { font-weight:600; overflow-wrap:anywhere; }
+  .pc-amt { margin-top:4px; font-weight:600; font-variant-numeric:tabular-nums; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 12px; }
   .chip { background: var(--panel); border: 1px solid var(--line);
           border-radius: 999px; padding: 3px 10px; color: var(--muted); }
@@ -320,7 +331,7 @@ function renderFiles() {
     const row = document.createElement('div');
     row.className = 'filerow';
     row.innerHTML = `
-      <div class="fname">${c.file.name}
+      <div class="fname">${esc(c.file.name)}
         <span class="fsize">${(c.file.size / 1024).toFixed(0)} KB</span></div>
       <input type="number" min="1" value="${c.copies}" class="fcopies">
       <button type="button" title="Remove">×</button>`;
@@ -391,6 +402,10 @@ $('#go').onclick = async () => {
   }
 };
 
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function money(n, cur) {
   const sign = n < 0 ? '-' : '';
   return sign + (cur === 'THB' ? '฿' : cur + ' ') + Math.abs(n).toFixed(2);
@@ -399,12 +414,12 @@ function money(n, cur) {
 function render(d) {
   const cur = d.currency, b = d.breakdown;
   const rows = d.lines.filter(l => Math.abs(l.amount) > 0.004).map(l => `
-    <tr><td>${l.label}${l.note ? `<span class="note">${l.note}</span>` : ''}</td>
+    <tr><td>${esc(l.label)}${l.note ? `<span class="note">${esc(l.note)}</span>` : ''}</td>
         <td class="amt">${money(l.amount, cur)}</td></tr>`).join('');
 
   const warn = d.warnings.length
     ? `<div class="warn"><strong>Check these</strong><ul>${
-        d.warnings.map(w => `<li>${w}</li>`).join('')}</ul></div>` : '';
+        d.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '';
 
   $('#out').innerHTML = `
     <div class="total">
@@ -417,14 +432,22 @@ function render(d) {
     <table>${rows}
       <tr class="sum"><td>Total</td><td class="amt">${money(d.total, cur)}</td></tr>
     </table>
-    ${b.plates.length > 1 ? `
-      <table style="margin-top:18px">
-        <tr><td colspan="2"><span class="note">Each plate is risked on its own duration</span></td></tr>
-        ${b.plates.map(pl => `<tr><td>${pl.label}
-          <span class="note">${pl.grams} g · ${pl.hours.toFixed(2)} h · ${pl.printer}${
-            pl.copies > 1 ? ` · ×${pl.copies}` : ''} · risk ×${pl.risk.factor.toFixed(3)}</span></td>
-          <td class="amt">${money(pl.subtotal, cur)}</td></tr>`).join('')}
-      </table>` : ''}
+    ${b.plates.length > 1 || b.plates.some(p => p.thumbnail) ? `
+      <div class="plates-head">${b.plates.length > 1
+        ? 'Plates — each risked on its own duration' : 'Plate'}</div>
+      <div class="plate-grid">
+        ${b.plates.map(pl => `<div class="plate-card">
+          ${pl.thumbnail
+            ? `<img src="${pl.thumbnail}" alt="${esc(pl.label)}">`
+            : `<div class="noimg">No picture in file</div>`}
+          <div class="pc-body">
+            <div class="pc-name" title="${esc(pl.label)}">${esc(pl.label)}</div>
+            <div class="note">${pl.grams} g · ${pl.hours.toFixed(2)} h · ${esc(pl.printer)}${
+              pl.copies > 1 ? ` · ×${pl.copies}` : ''}</div>
+            <div class="note">risk ×${pl.risk.factor.toFixed(3)}</div>
+            <div class="pc-amt">${money(pl.subtotal, cur)}</div>
+          </div></div>`).join('')}
+      </div>` : ''}
     <div class="chips">
       <span class="chip">${b.order.plates} plate${b.order.plates > 1 ? 's' : ''} from ${b.order.files} file${b.order.files > 1 ? 's' : ''}</span>
       <span class="chip">${(Math.min(...b.plates.map(x => x.risk.p_success_first_try)) * 100).toFixed(1)}% first-try success${b.plates.length > 1 ? ' (worst plate)' : ''}</span>

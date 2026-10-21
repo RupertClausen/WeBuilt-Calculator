@@ -139,8 +139,13 @@ def build_view(
     *,
     pricing_cfg: dict | None = None,
     printers_cfg: dict | None = None,
+    thumbnails: dict[int, str] | None = None,
 ) -> dict:
     """Turn a stored quote into what the customer is allowed to see.
+
+    `thumbnails` maps plate number to a picture URL; plates without one get
+    a placeholder. The picture is the customer's own part, so it is safe to
+    show.
 
     Labels for printers, rush tiers and delivery are looked up again from the
     current config by key, so an old quote can still be rendered in a
@@ -262,6 +267,7 @@ def build_view(
         "copies": pl["copies"],
         "success": pl["risk"]["p_success_first_try"] * 100,
         "subtotal": pl["subtotal"],
+        "thumbnail": (thumbnails or {}).get(pl["plate"]),
     } for pl in plates]
 
     biz = rc.get("business", {})
@@ -434,8 +440,18 @@ HTML = _env.from_string(r"""<!doctype html>
   .sub li { margin:1px 0; }
   .total td { border-bottom:0; border-top:2px solid var(--ink);
               font-size:18px; font-weight:700; padding-top:12px; }
-  .plates td, .plates th { font-size:12.5px; padding:6px 8px 6px 0; }
-  .plates td.num, .plates th.num { text-align:right; }
+  .plate-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; }
+  .plate { border:1px solid var(--line); border-radius:8px; overflow:hidden;
+           break-inside:avoid; page-break-inside:avoid; }
+  .plate img, .plate .noimg { display:block; width:100%; aspect-ratio:1;
+           object-fit:contain; background:var(--soft); }
+  .plate .noimg { display:flex; align-items:center; justify-content:center;
+           color:var(--muted); font-size:12px; }
+  .plate .pb { padding:8px 10px 10px; border-top:1px solid var(--line); }
+  .plate .pn { font-weight:600; font-size:13px; overflow-wrap:anywhere; }
+  .plate .ps { color:var(--muted); font-size:11.5px; }
+  .plate .pa { font-weight:700; font-size:13px; margin-top:4px;
+           font-variant-numeric:tabular-nums; }
   .method { color:#30353c; font-size:13px; padding-left:18px; margin:4px 0; }
   .method li { margin:4px 0; }
   .terms { font-size:12px; color:var(--muted); padding-left:18px; margin:4px 0; }
@@ -445,6 +461,7 @@ HTML = _env.from_string(r"""<!doctype html>
            color:var(--muted); font-size:12px; text-align:center; }
   #copied { font-size:12px; color:var(--ok); }
   @media (max-width:600px) { .paper { padding:24px 18px; } .doc { text-align:left; }
+                             .plate-grid { grid-template-columns:repeat(2, 1fr); }
                              .bar .lang { margin-left:0; } }
   @media print {
     html, body { background:#fff; }
@@ -452,6 +469,7 @@ HTML = _env.from_string(r"""<!doctype html>
     .paper { box-shadow:none; margin:0; max-width:none; padding:0; }
     @page { size:A4; margin:16mm 14mm; }
     tr, li { break-inside:avoid; }
+    .plate img { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
 </style>
 </head>
@@ -522,19 +540,25 @@ HTML = _env.from_string(r"""<!doctype html>
 
   {% if v.show_plates %}
   <h2>{{ v.t.section_plates }}</h2>
-  <table class="plates">
-    <tr><th>{{ v.t.col_file }}</th><th>{{ v.t.col_printer }}</th><th>{{ v.t.col_material }}</th>
-        <th class="num">{{ v.t.col_weight }}</th><th class="num">{{ v.t.col_time }}</th>
-        <th class="num">{{ v.t.col_runs }}</th><th class="num">{{ v.t.col_success }}</th>
-        <th class="num">{{ v.t.col_subtotal }}</th></tr>
+  <div class="plate-grid">
     {% for p in v.plates %}
-    <tr><td>{{ p.label }}</td><td>{{ p.printer }}</td><td>{{ p.materials }}</td>
-        <td class="num">{{ '%.1f'|format(p.grams) }} {{ v.t.unit_g }}</td><td class="num">{{ p.time }}</td>
-        <td class="num">{{ p.copies }}</td><td class="num">{{ '%.0f'|format(p.success) }}%</td>
-        <td class="num">{{ baht(p.subtotal) }}</td></tr>
+    <div class="plate">
+      {% if p.thumbnail %}
+      <img src="{{ p.thumbnail }}" alt="{{ p.label }}">
+      {% else %}
+      <div class="noimg">{{ v.t.no_picture }}</div>
+      {% endif %}
+      <div class="pb">
+        <div class="pn" title="{{ p.label }}">{{ p.label }}</div>
+        <div class="ps">{{ p.printer }} · {{ p.materials }}</div>
+        <div class="ps">{{ '%.1f'|format(p.grams) }} {{ v.t.unit_g }} · {{ p.time }}{% if p.copies > 1 %} · {{ v.t.col_runs }} {{ p.copies }}{% endif %}</div>
+        <div class="ps">{{ v.t.col_success }} {{ '%.0f'|format(p.success) }}%</div>
+        <div class="pa">{{ baht(p.subtotal) }}</div>
+      </div>
+    </div>
     {% endfor %}
-  </table>
-  <div class="det" style="margin-top:6px">{{ v.t.plates_note }}</div>
+  </div>
+  <div class="det" style="margin-top:8px">{{ v.t.plates_note }}</div>
   {% endif %}
 
   {% if v.show_method %}

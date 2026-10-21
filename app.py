@@ -19,6 +19,7 @@ Design notes:
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
@@ -30,7 +31,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 import pricing
@@ -95,6 +96,8 @@ config = ConfigStore(CONFIG_DIR)
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # Needed for ON DELETE CASCADE: deleting a quote removes its pictures.
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -148,9 +151,51 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_receipt"
             " ON quotes(receipt_no) WHERE receipt_no IS NOT NULL"
         )
+        # Plate pictures live apart from detail_json so the quote record
+        # stays small. `plate` matches breakdown.plates[].plate.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plate_thumbnails (
+                quote_id  INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+                plate     INTEGER NOT NULL,
+                mime      TEXT NOT NULL,
+                data      BLOB NOT NULL,
+                PRIMARY KEY (quote_id, plate)
+            )
+            """
+        )
 
 
 init_db()
+
+
+def plate_thumbnails(items: list) -> dict[int, tuple[bytes, str]]:
+    """Plate number -> (image, mime), numbered the same way as the quote's
+    breakdown.plates (one entry per item, starting at 1)."""
+    return {i: (it.job.thumbnail, it.job.thumbnail_mime)
+            for i, it in enumerate(items, start=1)
+            if it.job.thumbnail and it.job.thumbnail_mime}
+
+
+def thumbnail_url(quote_id: int, plate: int) -> str:
+    return f"/api/orders/{quote_id}/plates/{plate}/thumbnail"
+
+
+def attach_thumbnails(payload: dict, thumbs: dict, quote_id: int | None) -> None:
+    """Give each plate in the response a picture link. Saved quotes point at
+    the stored image; unsaved ones carry it inline. Works on a copy of the
+    plate list so nothing is written back into the stored quote."""
+    plates = [dict(p) for p in payload["breakdown"].get("plates", [])]
+    for p in plates:
+        hit = thumbs.get(p["plate"])
+        if not hit:
+            p["thumbnail"] = None
+        elif quote_id is not None:
+            p["thumbnail"] = thumbnail_url(quote_id, p["plate"])
+        else:
+            data, mime = hit
+            p["thumbnail"] = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+    payload["breakdown"] = {**payload["breakdown"], "plates": plates}
 
 
 def local_now() -> datetime:
@@ -182,6 +227,7 @@ def log_quote(
     rush: str,
     delivery: str,
     customer: dict | None = None,
+    thumbnails: dict[int, tuple[bytes, str]] | None = None,
 ) -> tuple[int, str]:
     """Append a quote to the order log.
 
@@ -198,6 +244,7 @@ def log_quote(
 
     customer = customer or {}
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         # IMMEDIATE takes the write lock before reading the highest receipt
         # number, so two quotes saved at once cannot get the same number.
@@ -235,8 +282,13 @@ def log_quote(
                 "unpaid",
             ),
         )
+        quote_id = cur.lastrowid
+        for plate, (data, mime) in (thumbnails or {}).items():
+            conn.execute(
+                "INSERT INTO plate_thumbnails (quote_id, plate, mime, data)"
+                " VALUES (?,?,?,?)", (quote_id, plate, mime, data))
         conn.execute("COMMIT")
-        return cur.lastrowid, receipt_no
+        return quote_id, receipt_no
     except sqlite3.IntegrityError as exc:
         conn.execute("ROLLBACK")
         raise HTTPException(
@@ -422,6 +474,7 @@ async def quote_endpoint(
         "parse_ms": round((time.perf_counter() - t0) * 1000, 1),
     }
 
+    thumbs = plate_thumbnails(items)
     if save:
         payload["quote_id"], payload["receipt_no"] = log_quote(
             payload["file"]["name"], quote,
@@ -429,8 +482,10 @@ async def quote_endpoint(
             customer={"customer_name": customer_name,
                       "customer_contact": customer_contact,
                       "notes": notes, "receipt_no": receipt_no or None},
+            thumbnails=thumbs,
         )
         payload["receipt_url"] = f"/receipt/{payload['quote_id']}"
+    attach_thumbnails(payload, thumbs, payload.get("quote_id"))
 
     return JSONResponse(payload)
 
@@ -534,6 +589,7 @@ def quote_manual(body: ManualQuote):
                       "notes": body.notes, "receipt_no": body.receipt_no or None},
         )
         payload["receipt_url"] = f"/receipt/{payload['quote_id']}"
+    attach_thumbnails(payload, {}, payload.get("quote_id"))   # manual: no pictures
 
     return JSONResponse(payload)
 
@@ -585,9 +641,13 @@ def _load_order(quote_id: int) -> tuple[dict, dict]:
 
 def _view(quote_id: int, lang: str | None = None) -> dict:
     row, quote = _load_order(quote_id)
+    with db() as conn:
+        plates = [r["plate"] for r in conn.execute(
+            "SELECT plate FROM plate_thumbnails WHERE quote_id = ?", (quote_id,))]
     return receipt_doc.build_view(
         row, quote, config["receipt"], lang,
-        pricing_cfg=config["pricing"], printers_cfg=config["printers"])
+        pricing_cfg=config["pricing"], printers_cfg=config["printers"],
+        thumbnails={p: thumbnail_url(quote_id, p) for p in plates})
 
 
 @app.get("/api/receipt/{quote_id}")
@@ -605,6 +665,22 @@ def receipt_html(quote_id: int, lang: str | None = None):
 @app.get("/receipt/{quote_id:int}.txt", response_class=PlainTextResponse)
 def receipt_text(quote_id: int, lang: str | None = None):
     return PlainTextResponse(receipt_doc.render_text(_view(quote_id, lang)))
+
+
+@app.get("/api/orders/{quote_id}/plates/{plate}/thumbnail")
+def get_thumbnail(quote_id: int, plate: int):
+    with db() as conn:
+        row = conn.execute(
+            "SELECT mime, data FROM plate_thumbnails WHERE quote_id = ? AND plate = ?",
+            (quote_id, plate)).fetchone()
+    if row is None:
+        raise HTTPException(404, "No picture for that plate")
+    # Only PNG/JPEG are ever stored (checked by their bytes on upload), and
+    # nosniff stops the browser second-guessing the type.
+    return Response(content=row["data"], media_type=row["mime"], headers={
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 @app.post("/api/orders/{quote_id}/payment")
