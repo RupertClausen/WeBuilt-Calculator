@@ -72,6 +72,8 @@ headroom_detail: "{pct} of the subtotal, for estimate error in print time and fi
 rush_label: "Rush: {label}"
 rush_detail: "× {mult} on the subtotal"
 adjust_label: "Rate adjustment"
+profit_label: "Service margin"
+profit_detail: "Our profit: {pct} of the price before delivery"
 delivery_label: "Delivery"
 minimum_label: "Minimum order"
 minimum_detail: "Orders start at {min}"
@@ -89,6 +91,7 @@ method_risk_measured: "from our own printers' failure records"
 method_risk_typical: "from typical failure rates for this kind of printer (we are still collecting records for our own machines)"
 method_risk_free: " Because it is included, a reprint caused by a print failure costs you nothing."
 method_headroom: "A {pct} contingency covers the difference between the slicer's estimate and the real print."
+method_profit: "Everything above is a running cost, pays for printer time, or pays for our labour. The service margin is the business's profit: {pct} of the price, not counting delivery."
 
 # --- plain text version ---
 txt_customer: "Customer: {name}"

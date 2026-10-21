@@ -134,6 +134,12 @@
   .pc-body { padding:8px 10px 10px; font-size:13px; }
   .pc-name { font-weight:600; overflow-wrap:anywhere; }
   .pc-amt { margin-top:4px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .econ { margin-top:22px; border:1px solid var(--line); border-radius:10px;
+          padding:12px 14px; background:var(--panel); }
+  .econ-head { font-weight:600; font-size:14px; margin-bottom:6px; }
+  .econ-head span { font-weight:400; color:var(--muted); font-size:12px; margin-left:6px; }
+  .econ tr.neg td { color:#dc2626; }
+  .econ tr.profit td { font-weight:700; color:var(--ok); }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 12px; }
   .chip { background: var(--panel); border: 1px solid var(--line);
           border-radius: 999px; padding: 3px 10px; color: var(--muted); }
@@ -402,6 +408,37 @@ $('#go').onclick = async () => {
   }
 };
 
+// Internal only: how the total splits into costs, your pay and profit.
+// None of this appears on the receipt.
+function economicsTable(e, cur) {
+  if (!e) return '';
+  const row = (label, v, note = '', cls = '') => Math.abs(v) < 0.005 ? '' :
+    `<tr class="${cls}"><td>${label}${note ? `<span class="note">${note}</span>` : ''}</td>
+     <td class="amt">${money(v, cur)}</td></tr>`;
+  const rc = e.running_costs, lb = e.labour;
+  return `<div class="econ">
+    <div class="econ-head">Where the money goes <span>internal, not on the receipt</span></div>
+    <table>
+      ${row('Running costs', rc.total,
+            `filament at supplier cost ${money(rc.filament_at_supplier_cost, cur)}, electricity ${money(rc.electricity, cur)}, wear parts ${money(rc.wear_parts, cur)}`)}
+      ${row('Filament markup', e.filament_markup,
+            e.filament_markup < 0 ? 'below what the dearest restocked spool costs you' : 'charged minus supplier cost',
+            e.filament_markup < 0 ? 'neg' : '')}
+      ${row('Machine time', e.machine_time, 'pays the printer back')}
+      ${row('Your labour', lb.total,
+            [['setup', lb.setup], ['extra plates', lb.extra_plates], ['file prep', lb.file_prep], ['post-processing', lb.post_processing]]
+              .filter(([, v]) => v > 0.004).map(([k, v]) => `${k} ${money(v, cur)}`).join(', '))}
+      ${row('Failure allowance', e.failure_allowance, 'set aside for reprints')}
+      ${row('Contingency', e.contingency, 'slicer estimate error — not profit')}
+      ${row('Rush premium', e.rush_premium)}
+      ${row('Rate adjustment', e.rate_adjustment)}
+      ${row(`Profit (${e.profit_margin * 100}%)`, e.profit, 'what the business keeps', 'profit')}
+      ${row('Delivery', e.delivery, 'passed through')}
+      ${row('Rounding / minimum', e.rounding)}
+      <tr class="sum"><td>Total</td><td class="amt">${money(e.total, cur)}</td></tr>
+    </table></div>`;
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -452,9 +489,10 @@ function render(d) {
       <span class="chip">${b.order.plates} plate${b.order.plates > 1 ? 's' : ''} from ${b.order.files} file${b.order.files > 1 ? 's' : ''}</span>
       <span class="chip">${(Math.min(...b.plates.map(x => x.risk.p_success_first_try)) * 100).toFixed(1)}% first-try success${b.plates.length > 1 ? ' (worst plate)' : ''}</span>
       <span class="chip">${b.client.label}</span>
-      <span class="chip">margin ${b.margin.margin_pct}%</span>
+      <span class="chip">profit ${money(b.economics.profit, cur)} (${b.economics.profit_margin * 100}%)</span>
       <span class="chip">parsed via ${d.file.parsed_by}</span>
     </div>
+    ${economicsTable(b.economics, cur)}
     <details><summary>Full breakdown (JSON)</summary>
       <pre>${JSON.stringify(d, null, 2)}</pre></details>`;
 }

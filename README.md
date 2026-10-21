@@ -11,7 +11,7 @@ python3 -m uvicorn app:app --reload --port 8000
 To try things without adding to the real order log, point the server at a
 throwaway database: `WEBUILT_DB=/tmp/trial.db python3 -m uvicorn app:app --port 8001`.
 
-Run the tests with `python3 tests/run_all.py` (52 tests, 5 suites). They
+Run the tests with `python3 tests/run_all.py` (62 tests, 6 suites). They
 use a throwaway database and never touch `orders.db`.
 
 ---
@@ -182,6 +182,53 @@ include them already.
 Saved quotes keep their pictures in a separate `plate_thumbnails` table in
 `orders.db`, not inside the quote record, and they are deleted with the quote.
 A quote that isn't saved returns the pictures inline instead.
+
+## Profit margin
+
+`profit_margin: 0.15` in `config/pricing.yaml` is what the business keeps,
+**on top of** everything else. Your time is already paid by the setup fee, the
+extra-plate fee and the labour rate; this is the profit after that.
+
+It is a **margin on price, not a markup on cost.** 15% means 15% of what the
+customer pays (before delivery) is profit, so the price is divided by 0.85
+(×1.176), not multiplied by 1.15. A 15% markup would leave only 13% as profit.
+
+- Applies to every charge except delivery, which is passed straight through.
+- A client profile can set its own `profit_margin`. `internal` is 0.
+- Must be at least 0 and below 0.9; anything else is refused with an error.
+
+On the receipt it is its own line, **Service margin** / **ค่าบริการ**, described
+as the shop's profit ("Our profit: 15% of the price before delivery"), plus one
+sentence in "How this price is calculated". Both disappear when the margin is
+0. Folding profit into the hourly rates instead would make the receipt's
+explanation of those rates untrue.
+
+### Where the money goes
+
+The quote page has an internal table, never shown on the receipt, that splits
+the total into buckets that add up to it exactly:
+
+| bucket | what it is |
+|---|---|
+| Running costs | filament at supplier cost, electricity, wear parts |
+| Filament markup | charged minus supplier cost. **Red when negative** |
+| Machine time | pays the printers back |
+| Your labour | setup, extra plates, file prep, post-processing |
+| Failure allowance | set aside for reprints |
+| Contingency | slicer estimate error. Not profit |
+| Profit | what the business keeps |
+| Delivery, rounding | passed through / rounding |
+
+The order log stores `labour`, `contingency` and `profit` per quote, so a
+month of orders can be added up. The old "margin %" figure, which counted your
+labour and the contingency as if they were profit, is gone from the page.
+
+**Today the filament markup is negative.** The flat ฿540/kg is below the
+dearest restocked spool for every standard type (PLA ฿690, PETG ฿720,
+ABS ฿750 in the roster), and the tool costs every job at the dearest spool. On
+the 222.86 g PETG reference job that is −฿41.72. Raise
+`flat_standard_price_per_kg`, or mark the expensive brands `restocked: false`
+if you don't actually load them for standard jobs.
 
 ## Client profiles — replacing the faculty exponent
 
@@ -491,3 +538,7 @@ Numbers only; all of them live in the config files.
 10. **Receipt details and terms** in `config/receipt.yaml`: LINE ID, phone,
     pickup point, and whether the four placeholder terms are what you
     actually offer.
+11. **`profit_margin: 0.15`** — revisit after a month: monthly profit you
+    want ÷ monthly revenue from the order log.
+12. **The flat filament rate** — currently below your dearest restocked
+    spools, so the filament line loses money on paper.

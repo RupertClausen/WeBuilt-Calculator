@@ -249,6 +249,8 @@ def build_view(
     add("rush", t("rush_label", label=rush_name),
         t("rush_detail", mult=f"{rates.get('rush_multiplier', 1):g}"))
     add("client_price", t("adjust_label"))
+    add("profit", t("profit_label"),
+        t("profit_detail", pct=pct(rates.get("profit_margin_pct", 0))))
     add("delivery", t("delivery_label"), delivery_name)
     if rates.get("minimum_applied"):
         add("rounding", t("minimum_label"),
@@ -338,7 +340,8 @@ def method_text(rates: dict, t: Locale, *, flat_rate: bool, measured: bool,
           source=t("method_risk_measured") if measured else t("method_risk_typical"),
           free=t("method_risk_free") if free_reprints else ""),
         t("method_headroom", pct=pct(rates.get("headroom_pct", 0))),
-    ]
+    ] + ([t("method_profit", pct=pct(rates["profit_margin_pct"]))]
+         if rates.get("profit_margin_pct", 0) > 0 else [])
 
 
 # ---------------------------------------------------------------------------

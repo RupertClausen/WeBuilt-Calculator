@@ -305,6 +305,14 @@ def build_quote(
     prof_risk = float(profile.get("risk_multiplier", 1.0))
     prof_postproc = float(profile.get("postproc_multiplier", 1.0))
     prof_price = float(profile.get("price_multiplier", 1.0))
+
+    # Profit: a share of the price, not a markup on cost. A profile may set
+    # its own (internal jobs carry none).
+    profit_margin = float(profile.get("profit_margin",
+                                      pricing.get("profit_margin", 0.0)) or 0.0)
+    if not 0.0 <= profit_margin < 0.9:
+        raise ValueError(
+            f"profit_margin must be at least 0 and below 0.9, got {profit_margin}")
     prep_min = prep_minutes if prep_minutes is not None else float(
         profile.get("prep_minutes", 0.0))
 
@@ -454,7 +462,11 @@ def build_quote(
     rush_spec = pricing["rush_tiers"].get(rush_key) or pricing["rush_tiers"]["standard"]
     rush_mult = float(rush_spec["multiplier"])
 
-    after_multipliers = subtotal * headroom * rush_mult * prof_price
+    before_profit = subtotal * headroom * rush_mult * prof_price
+    # Margin on price: profit is `profit_margin` of the price before delivery,
+    # so divide rather than multiply. 15% -> x1.176, of which 15% is profit.
+    after_multipliers = before_profit / (1.0 - profit_margin)
+    profit = after_multipliers - before_profit
 
     del_key = delivery or pricing.get("default_delivery", "pickup")
     del_spec = pricing["delivery_options"].get(del_key) or {"fee": 0, "label": del_key}
@@ -525,6 +537,10 @@ def build_quote(
             "client_price", f"{profile.get('label', prof_key)} rate",
             (subtotal * headroom * rush_mult) * (prof_price - 1.0),
             f"x{prof_price}"))
+    if profit > 0.004:
+        lines.append(LineItem(
+            "profit", "Profit margin", profit,
+            f"{profit_margin*100:g}% of the price before delivery"))
     if delivery_fee:
         lines.append(LineItem("delivery", del_spec.get("label", del_key), delivery_fee))
 
@@ -534,6 +550,41 @@ def build_quote(
 
     true_cost = agg["material_cost"] + agg["electricity"] + agg["maintenance"]
     margin = total - true_cost
+
+    # Where the money goes. Every charge on the quote lands in exactly one
+    # bucket, so the buckets add up to the total. Kept internal: the receipt
+    # never shows supplier cost or this split.
+    amt = {l.key: l.amount for l in lines}
+    labour = {
+        "setup": setup,
+        "extra_plates": plates_charge,
+        "file_prep": prep,
+        "post_processing": postproc,
+    }
+    running = {
+        "filament_at_supplier_cost": agg["material_cost"],
+        "electricity": agg["electricity"],
+        "wear_parts": agg["maintenance"],
+    }
+    economics = {
+        "running_costs": {k: round(v, 2) for k, v in running.items()}
+                         | {"total": round(sum(running.values()), 2)},
+        # Negative means the filament line sells below what the dearest
+        # restocked spool costs you.
+        "filament_markup": round(agg["material"] - agg["material_cost"], 2),
+        "machine_time": round(agg["machine"], 2),
+        "labour": {k: round(v, 2) for k, v in labour.items()}
+                  | {"total": round(sum(labour.values()), 2)},
+        "failure_allowance": round(amt.get("risk", 0.0), 2),
+        "contingency": round(amt.get("headroom", 0.0), 2),
+        "rush_premium": round(amt.get("rush", 0.0), 2),
+        "rate_adjustment": round(amt.get("client_price", 0.0), 2),
+        "profit": round(profit, 2),
+        "profit_margin": profit_margin,
+        "delivery": round(delivery_fee, 2),
+        "rounding": round(rounding_delta, 2),
+        "total": round(total, 2),
+    }
 
     breakdown = {
         "order": {
@@ -555,12 +606,14 @@ def build_quote(
             "postproc_multiplier": prof_postproc,
             "price_multiplier": prof_price,
         },
+        "economics": economics,
         "margin": {
             "estimated_direct_cost": round(true_cost, 2),
             "estimated_margin": round(margin, 2),
             "margin_pct": round(100 * margin / total, 1) if total else 0.0,
-            "note": "Direct cost only: filament at supplier price, power, "
-                    "maintenance parts. Excludes your labour.",
+            "note": "Gross: the total minus running costs. This is NOT profit; "
+                    "it also contains your labour, the contingency and the "
+                    "failure allowance. See `economics` for the split.",
         },
         "rates": {
             "setup_fee": setup,
@@ -568,6 +621,7 @@ def build_quote(
             "labour_per_hour": labour_rate,
             "electricity_per_kwh": float(pricing["electricity_tariff_per_kwh"]),
             "headroom_pct": round((headroom - 1.0) * 100, 2),
+            "profit_margin_pct": round(profit_margin * 100, 2),
             "rush_multiplier": rush_mult,
             "rush_key": rush_key,
             "rush_label": rush_spec.get("label", rush_key),

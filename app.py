@@ -144,6 +144,10 @@ def init_db() -> None:
             ("payment_status", "TEXT DEFAULT 'unpaid'"),
             ("payment_method", "TEXT"),
             ("paid_at", "TEXT"),
+            # Where the money goes, so a month of orders can be summed.
+            ("labour", "REAL"),
+            ("contingency", "REAL"),
+            ("profit", "REAL"),
         ):
             if col not in have:
                 conn.execute(f"ALTER TABLE quotes ADD COLUMN {col} {ddl}")
@@ -241,6 +245,7 @@ def log_quote(
     materials = sorted({m["type"] for m in bd.get("materials", [])})
     worst_p = min((d["risk"]["p_success_first_try"] for d in plates), default=1.0)
     worst_rf = max((d["risk"]["factor"] for d in plates), default=1.0)
+    econ = bd.get("economics", {})
 
     customer = customer or {}
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
@@ -256,8 +261,8 @@ def log_quote(
                 rush, delivery, total, currency, est_cost, est_margin,
                 p_success, risk_factor, detail_json,
                 receipt_no, customer_name, customer_contact, notes,
-                payment_status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                payment_status, labour, contingency, profit)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 filename,
@@ -280,6 +285,9 @@ def log_quote(
                 customer.get("customer_contact"),
                 customer.get("notes"),
                 "unpaid",
+                econ.get("labour", {}).get("total"),
+                econ.get("contingency"),
+                econ.get("profit"),
             ),
         )
         quote_id = cur.lastrowid
@@ -600,7 +608,8 @@ def list_orders(limit: int = 50):
         rows = conn.execute(
             "SELECT id, receipt_no, created_at, customer_name, filename, printer,"
             " materials, grams, hours, total, currency, est_margin, p_success,"
-            " outcome, payment_status, payment_method, paid_at"
+            " outcome, payment_status, payment_method, paid_at,"
+            " labour, contingency, profit"
             " FROM quotes ORDER BY id DESC LIMIT ?",
             (min(limit, 500),),
         ).fetchall()

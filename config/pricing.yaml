@@ -76,7 +76,33 @@ max_risk_factor: 2.5
 # Flat safety margin applied AFTER the measured risk maths.
 # Kept separate on purpose: it lets you be cautious without corrupting
 # the measured failure statistics. 1.15 = +15%.
+#
+# This is NOT profit. The receipt tells the customer it covers error in the
+# slicer's time and weight estimates, so it must actually be that. Once you
+# have compared estimates with real prints, shrink it to fit, and move any
+# difference into profit_margin below, where it is labelled honestly.
 headroom: 1.15
+
+# ---------------------------------------------------------------------------
+# Profit
+# ---------------------------------------------------------------------------
+# The business's profit, ON TOP of everything else in the quote. Your time is
+# already paid by setup_fee, additional_plate_fee and labour_rate_per_hour;
+# this is what the business keeps after that.
+#
+# It is a MARGIN ON PRICE, not a markup on cost:
+#     profit_margin: 0.15  ->  15% of the price (before delivery) is profit
+#                          ->  price = everything else / (1 - 0.15)
+#                          ->  x1.176, not x1.15
+# A 15% markup would be x1.15 and leave only 13% of the price as profit.
+#
+# Applied to every charge except delivery, which is passed straight through.
+# Shown on the receipt as its own line ("Service margin" / "ค่าบริการ").
+#
+# Choosing it: monthly profit you want / monthly revenue you expect. The order
+# log gives you real revenue after a month. Must be at least 0 and below 0.9.
+# A client profile may override it with its own profit_margin.
+profit_margin: 0.15
 
 # ---------------------------------------------------------------------------
 # Rush tiers
@@ -140,6 +166,8 @@ minimum_price: 50
 #                        material does. Compounds with duration and with the
 #                        machine's own curve shape, but stays bounded.
 #   postproc_multiplier  scales whatever post-processing minutes you enter.
+#   profit_margin        optional; overrides the global profit_margin for
+#                        this profile (e.g. 0 for internal jobs).
 #   price_multiplier     blunt across-the-board markup. Left at 1.0 by
 #                        default — prefer the three above, which you can
 #                        actually justify to a customer line by line.
@@ -182,6 +210,7 @@ client_profiles:
     risk_multiplier: 1.0
     postproc_multiplier: 1.0
     price_multiplier: 0.0     # at cost
+    profit_margin: 0.0        # no profit on your own jobs
 
 default_client_profile: general
 

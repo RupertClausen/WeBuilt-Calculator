@@ -16,8 +16,14 @@ import receipt as receipt_doc
 
 client = TestClient(appmod.app)
 
-FORBIDDEN = ("cost_per_kg", "estimated_direct_cost", "margin", "supplier",
-             "architecture", "engineering", "general / staff", "internal / webuilt")
+# Internal figures that must never reach a customer. The receipt DOES show
+# the profit margin on purpose, as its own labelled line, so "margin" and
+# "กำไร" are allowed; what stays hidden is the internal split and the
+# supplier-cost-based numbers behind it.
+FORBIDDEN = ("cost_per_kg", "estimated_direct_cost", "estimated_margin",
+             "margin_pct", "supplier", "economics", "running_costs",
+             "filament_markup", "architecture", "engineering",
+             "general / staff", "internal / webuilt")
 
 
 def save_upload(names, **data):
@@ -39,7 +45,7 @@ def visible_text(html):
     return html.lower()
 
 
-FORBIDDEN_TH = ("ต้นทุน", "กำไร", "สถาปัตย", "วิศวกรรม")   # cost, profit, faculties
+FORBIDDEN_TH = ("ต้นทุน", "สถาปัตย", "วิศวกรรม")   # cost, faculties
 
 
 def test_no_internal_numbers_reach_the_customer():
