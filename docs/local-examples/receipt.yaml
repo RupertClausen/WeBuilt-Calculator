@@ -1,0 +1,17 @@
+# Copy to local/receipt.yaml and edit. Only what you list here changes;
+# everything else still comes from the shared config/receipt.yaml.
+
+# IMPORTANT for a team: each computer numbers its own receipts. Give every
+# person a different prefix, or two people will hand out the same number.
+#   WB-A-2610-001, WB-A-2610-002 …  on this computer
+#   WB-B-2610-001 …                 on someone else's
+receipt_prefix: "WB-A"
+
+# Open receipts in Thai by default on this computer.
+default_language: "th"
+
+# Your own contact details on receipts you issue (optional).
+business:
+  contact:
+    line: "@your-line-id"
+    phone: ""

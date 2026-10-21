@@ -1,0 +1,4 @@
+# Copy to local/settings.yaml for preferences on this computer.
+
+# Set to false to stop the app checking GitHub for new versions.
+update_check: true

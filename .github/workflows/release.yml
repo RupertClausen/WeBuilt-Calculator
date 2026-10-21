@@ -1,0 +1,58 @@
+name: Release
+
+# Push a tag like v1.2.3 to publish that version. The tag must match
+# release.json; the tests must pass on Linux and Windows; then the zip
+# teammates download (and the updater installs) is built and attached.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python tests/run_all.py
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tag must match release.json
+        run: |
+          want="v$(python -c 'import json; print(json.load(open("release.json"))["version"])')"
+          if [ "$want" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match release.json ($want)"
+            exit 1
+          fi
+
+      - name: Build
+        run: python tools/build_release.py --repo "$GITHUB_REPOSITORY"
+
+      - name: Release notes from CHANGELOG.md
+        run: python tools/changelog_section.py "${GITHUB_REF_NAME#v}" > notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/webuilt-quote-*.zip dist/webuilt-quote-*.zip.sha256 \
+            --title "WeBuilt Quote ${GITHUB_REF_NAME#v}" --notes-file notes.md

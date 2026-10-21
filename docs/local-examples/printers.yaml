@@ -1,0 +1,26 @@
+# Copy to local/printers.yaml if YOUR printers differ from the shared list.
+# Only what you list changes; the rest comes from config/printers.yaml.
+
+printers:
+  normal:
+    # Your own measured failure numbers for this machine.
+    p_start: 0.98
+    hazard: 0.010
+    measured: true
+
+  # Add a printer only you have:
+  # mini:
+  #   label: "Mini"
+  #   label_th: "เครื่องเล็ก"
+  #   model: "Bambu Lab A1 mini"
+  #   build_volume_mm: [180, 180, 180]
+  #   power_w: 80
+  #   rate_per_hour: 12
+  #   maintenance_per_hour: 1.5
+  #   p_start: 0.97
+  #   hazard: 0.015
+  #   shape: 1.0
+  #   measured: false
+
+  # Hide a shared printer you don't have:
+  # large: null

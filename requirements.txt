@@ -1,5 +1,10 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-python-multipart>=0.0.9
-PyYAML>=6.0
-jinja2>=3.1
+# Exact versions the app is tested with. The launcher installs these into a
+# private .venv, so teammates all run the same thing. Bump deliberately,
+# run the tests, and note it in CHANGELOG.md.
+fastapi==0.141.1
+starlette==1.3.1
+pydantic==2.13.4
+uvicorn==0.52.4
+python-multipart==0.0.32
+PyYAML==6.0.3
+Jinja2==3.1.6

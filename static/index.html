@@ -72,6 +72,15 @@
   td .note { display: block; color: var(--muted); font-size: 12px; }
   tr.sum td { font-weight: 700; border-bottom: 0; }
 
+  .ver { font-size:12px; font-weight:500; color:var(--muted); margin-left:4px; }
+  .upd { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;
+         border:1px solid var(--accent); border-radius:10px; padding:10px 14px;
+         margin:12px 0; font-size:14px;
+         background:color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+  .upd .grow { flex:1 1 220px; }
+  .upd button { padding:7px 14px; }
+  .upd details { flex-basis:100%; font-size:13px; }
+  .upd pre { white-space:pre-wrap; margin:6px 0 0; font:inherit; color:var(--muted); }
   .warn {
     background: var(--warn-bg); color: var(--warn-fg);
     border: 1px solid var(--warn-line); border-radius: 8px;
@@ -147,7 +156,8 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>WeBuilt Quote</h1>
+  <h1>WeBuilt Quote <span id="ver" class="ver"></span></h1>
+  <div id="appnotice"></div>
   <div class="sub">Sliced files from OrcaSlicer or Bambu Studio — <code>.gcode</code> or <code>.gcode.3mf</code>. Add one file per plate when the parts do not fit on one bed.</div>
 
   <div class="tabs" role="tablist">
@@ -226,6 +236,57 @@ async function loadOptions() {
   setMode('upload');
 }
 loadOptions();
+
+// --- version, updates, broken settings --------------------------------
+async function loadVersion(refresh = false) {
+  let v;
+  try { v = await (await fetch('/api/version' + (refresh ? '?refresh=1' : ''))).json(); }
+  catch (e) { return; }
+  $('#ver').textContent = 'v' + v.version;
+  const out = [];
+  if (v.config_errors && v.config_errors.length) {
+    out.push(`<div class="warn"><strong>A settings file has a mistake</strong><ul>${
+      v.config_errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`);
+  }
+  if (v.update_available) {
+    let action;
+    if (v.can_self_update) {
+      action = `<button id="doupdate">Update and restart</button>`;
+    } else if (v.install === 'git') {
+      action = `<span class="note">Developer copy: update with <code>git pull</code>.</span>`;
+    } else {
+      action = `<span class="note">Close the app and run <code>python updater.py apply</code>.</span>`;
+    }
+    out.push(`<div class="upd"><span class="grow">Version <strong>${esc(v.latest)}</strong>
+      is available (you have ${esc(v.version)}).</span>${action}
+      ${v.notes ? `<details><summary>What's new</summary><pre>${esc(v.notes)}</pre></details>` : ''}</div>`);
+  }
+  $('#appnotice').innerHTML = out.join('');
+  const b = $('#doupdate');
+  if (b) b.onclick = () => startUpdate(v.version);
+  // the first check runs in the background; ask again once it has finished
+  if (v.checking) setTimeout(() => loadVersion(), 4000);
+}
+
+async function startUpdate(fromVersion) {
+  if (!confirm('Update now? The app restarts by itself; quotes you have saved are kept.')) return;
+  const r = await fetch('/api/update', { method: 'POST', headers: { 'X-WeBuilt-Action': 'update' } });
+  if (!r.ok) { alert((await r.json()).detail); return; }
+  $('#appnotice').innerHTML = '<div class="upd"><span class="grow">Updating… this page reloads when the new version is running.</span></div>';
+  const started = Date.now();
+  const poll = async () => {
+    try {
+      const v = await (await fetch('/api/version', { cache: 'no-store' })).json();
+      if (v.version !== fromVersion) { location.reload(); return; }
+    } catch (e) { /* restarting */ }
+    if (Date.now() - started < 5 * 60 * 1000) setTimeout(poll, 2000);
+    else $('#appnotice').innerHTML = '<div class="warn">The update is taking long. Check the app window for messages.</div>';
+  };
+  setTimeout(poll, 3000);
+}
+
+loadVersion();
+setInterval(() => loadVersion(), 30 * 60 * 1000);
 
 // --- client profile ---------------------------------------------------
 function currentProfile() {

@@ -12,7 +12,7 @@ import slicefile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FX = ROOT / "tests" / "fixtures"
-CFG = {k: yaml.safe_load((ROOT / "config" / f"{k}.yaml").read_text())
+CFG = {k: yaml.safe_load((ROOT / "config" / f"{k}.yaml").read_text(encoding="utf-8"))
        for k in ("pricing", "printers", "filaments")}
 client = TestClient(appmod.app)
 JOB = slicefile.parse("j.gcode", (FX / "orca_petg_single.gcode").read_bytes())

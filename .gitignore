@@ -3,14 +3,27 @@ __pycache__/
 *.pyc
 .venv/
 
-# The order log holds customer names, contacts and payment records.
-# It must never enter version history. SQLite's side files can carry the
-# same data, so they are excluded too.
+# Each computer's own things. Never committed, never touched by updates.
+#   data/    the order log: customer names, contacts, payments
+#   local/   personal setting overrides, and possibly a GitHub token
+#   backups/ previous versions kept by the updater
+data/
+local/
+backups/
+
+# A pre-1.0 order log in the app folder, and SQLite's side files, which can
+# carry the same customer data.
 orders.db
 orders.db-*
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Release builds and the updater's temporary folders
+dist/
+.update-*/
+.download-*/
+*.webuilt-new
 
 # Per-machine Claude Code settings
 .claude/settings.local.json

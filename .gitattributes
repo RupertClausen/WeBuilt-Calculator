@@ -1,0 +1,8 @@
+# Keep line endings right for each platform, whoever commits.
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.py   text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.html text eol=lf
+*.3mf  binary

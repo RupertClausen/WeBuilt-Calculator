@@ -2,7 +2,14 @@
 
 Internal tool. Upload a sliced file, get a price.
 
-    uvicorn app:app --reload --port 8000
+    ./run.sh            (or run.bat on Windows; sets everything up)
+    uvicorn app:app --reload --port 8000     (development)
+
+Folders:
+
+  config/   shared settings and price lists. Replaced by updates.
+  local/    this computer's own overrides. Never touched by updates.
+  data/     the order log. Never touched by updates.
 
 Design notes:
 
@@ -10,8 +17,8 @@ Design notes:
     stream to keep open. If you later want progress on very large uploads,
     add Server-Sent Events on /quote rather than a socket.
 
-  * The three YAML files under config/ are hot-reloaded on mtime change, so
-    you can edit filament prices mid-shift without restarting anything.
+  * The YAML files under config/ and local/ are hot-reloaded on mtime
+    change, so prices can change mid-shift without restarting anything.
 
   * Every quote is appended to orders.db so you can audit margins later and
     back-fit the failure rates from what actually happened.
@@ -23,37 +30,94 @@ import base64
 import json
 import os
 import sqlite3
+import threading
 import time
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from zoneinfo import ZoneInfo
 
 import yaml
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 import pricing
+import updater
 import receipt as receipt_doc
 from pricing import QuoteItem
 from slicefile import FilamentUse, ParseError, SlicedJob, parse
 
 BASE = Path(__file__).parent
 CONFIG_DIR = BASE / "config"
+LOCAL_DIR = BASE / "local"
+DATA_DIR = BASE / "data"
+
+RELEASE = json.loads((BASE / "release.json").read_text(encoding="utf-8"))
+APP_VERSION = RELEASE["version"]
+
+
+def _default_db() -> Path:
+    """data/orders.db, moving a pre-1.0 orders.db from the app folder there
+    once. Only moved when SQLite has no side files open next to it, so a
+    database in use is never split from its journal."""
+    new, old = DATA_DIR / "orders.db", BASE / "orders.db"
+    if not new.exists() and old.exists():
+        side = [p for p in BASE.glob("orders.db-*")]
+        if side:
+            print(f"[webuilt] keeping {old.name} in place: SQLite side files present")
+            return old
+        DATA_DIR.mkdir(exist_ok=True)
+        old.rename(new)
+        print(f"[webuilt] moved {old.name} to data/{new.name}")
+    DATA_DIR.mkdir(exist_ok=True)
+    return new
+
+
 # WEBUILT_DB points the server at another database, e.g. a throwaway one for
 # testing, so trial quotes never land in the real order log.
-DB_PATH = Path(os.environ.get("WEBUILT_DB") or BASE / "orders.db")
+DB_PATH = Path(os.environ["WEBUILT_DB"]) if os.environ.get("WEBUILT_DB") else _default_db()
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024        # sliced files get big
 
-app = FastAPI(title="WeBuilt quote service", version="1.0")
+@asynccontextmanager
+async def _lifespan(_app):
+    update_check.get()          # start the first background check
+    yield
+
+
+app = FastAPI(title=RELEASE.get("name", "WeBuilt quote service"), version=APP_VERSION,
+              lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
 # config, with hot reload
 # ---------------------------------------------------------------------------
 
+def deep_merge(base, override):
+    """Overlay `override` on `base`. Mappings merge key by key; anything else
+    (numbers, text, lists) is replaced whole. A key set to null in the
+    override removes it, e.g. `large: null` drops a shared printer."""
+    if isinstance(base, dict) and isinstance(override, dict):
+        out = dict(base)
+        for k, v in override.items():
+            if v is None:
+                out.pop(k, None)
+            else:
+                out[k] = deep_merge(base.get(k), v)
+        return out
+    return override
+
+
 class ConfigStore:
+    """Shared config from config/, with this computer's overrides from local/
+    laid on top. Both are re-read when either file changes.
+
+    A broken edit never takes the app down mid-shift: if a file stops
+    parsing, the last good version stays in use and the problem is reported
+    on every quote until it is fixed.
+    """
+
     FILES = {
         "pricing": "pricing.yaml",
         "printers": "printers.yaml",
@@ -61,44 +125,83 @@ class ConfigStore:
         "receipt": "receipt.yaml",
     }
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, local_dir: Path | None = None):
         self.dir = directory
+        self.local_dir = local_dir
         self._data: dict[str, dict] = {}
-        self._mtimes: dict[str, float] = {}
-        self.load(force=True)
+        self._stamp: dict[str, tuple] = {}
+        self.errors: dict[str, str] = {}
+        self.load(force=True, strict=True)
 
-    def load(self, force: bool = False) -> list[str]:
+    def _paths(self, name: str) -> tuple[Path, Path | None]:
+        local = self.local_dir / name if self.local_dir else None
+        return self.dir / name, (local if local and local.exists() else None)
+
+    @staticmethod
+    def _read(path: Path) -> dict:
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        if not isinstance(data, dict):
+            raise ValueError("top level must be a mapping of settings")
+        return data
+
+    def load(self, force: bool = False, strict: bool = False) -> list[str]:
         reloaded = []
         for key, name in self.FILES.items():
-            path = self.dir / name
-            if not path.exists():
-                raise RuntimeError(f"Missing config file: {path}")
-            mtime = path.stat().st_mtime
-            if force or self._mtimes.get(key) != mtime:
-                with path.open("r", encoding="utf-8") as fh:
-                    self._data[key] = yaml.safe_load(fh) or {}
-                self._mtimes[key] = mtime
-                reloaded.append(name)
+            shared, local = self._paths(name)
+            if not shared.exists():
+                raise RuntimeError(f"Missing config file: {shared}")
+            stamp = (shared.stat().st_mtime, local.stat().st_mtime if local else None)
+            if not force and self._stamp.get(key) == stamp:
+                continue
+            current = shared
+            try:
+                merged = self._read(shared)
+                if local:
+                    current = local
+                    merged = deep_merge(merged, self._read(local))
+            except (yaml.YAMLError, ValueError, OSError) as exc:
+                where = f"{current.parent.name}/{current.name}"
+                if strict or key not in self._data:
+                    raise RuntimeError(f"Cannot load {where}: {exc}") from exc
+                self.errors[key] = (f"{where} has an error, so its last working "
+                                    f"version is still in use: {str(exc).splitlines()[0]}")
+                self._stamp[key] = stamp            # don't re-parse until it changes
+                continue
+            self._data[key] = merged
+            self._stamp[key] = stamp
+            self.errors.pop(key, None)
+            reloaded.append(name)
         return reloaded
+
+    def local_files(self) -> list[str]:
+        return [n for n in self.FILES.values() if self._paths(n)[1]]
 
     def __getitem__(self, key: str) -> dict:
         self.load()          # cheap stat() per request
         return self._data[key]
 
 
-config = ConfigStore(CONFIG_DIR)
+config = ConfigStore(CONFIG_DIR, LOCAL_DIR)
 
 
 # ---------------------------------------------------------------------------
 # order log
 # ---------------------------------------------------------------------------
 
-def db() -> sqlite3.Connection:
+@contextmanager
+def db():
+    """A connection that commits on success, rolls back on error, and is
+    always closed: the server runs all day, so nothing may be left open."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     # Needed for ON DELETE CASCADE: deleting a quote removes its pictures.
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -148,6 +251,8 @@ def init_db() -> None:
             ("labour", "REAL"),
             ("contingency", "REAL"),
             ("profit", "REAL"),
+            # Which release (and so which price list) produced the quote.
+            ("app_version", "TEXT"),
         ):
             if col not in have:
                 conn.execute(f"ALTER TABLE quotes ADD COLUMN {col} {ddl}")
@@ -261,8 +366,8 @@ def log_quote(
                 rush, delivery, total, currency, est_cost, est_margin,
                 p_success, risk_factor, detail_json,
                 receipt_no, customer_name, customer_contact, notes,
-                payment_status, labour, contingency, profit)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                payment_status, labour, contingency, profit, app_version)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 filename,
@@ -288,6 +393,7 @@ def log_quote(
                 econ.get("labour", {}).get("total"),
                 econ.get("contingency"),
                 econ.get("profit"),
+                APP_VERSION,
             ),
         )
         quote_id = cur.lastrowid
@@ -312,6 +418,101 @@ def log_quote(
 # ---------------------------------------------------------------------------
 # endpoints
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# version and updates
+# ---------------------------------------------------------------------------
+
+def local_settings() -> dict:
+    """local/settings.yaml: this computer's preferences (update_check: false
+    turns off the update notice). Optional."""
+    f = LOCAL_DIR / "settings.yaml"
+    if not f.exists():
+        return {}
+    try:
+        return yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return {}
+
+
+class UpdateCheck:
+    """Asks GitHub for the newest release in the background, at most every
+    few hours, so the page never waits on the network."""
+
+    EVERY = 6 * 3600
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.result: dict = {}
+        self.checked_at = 0.0
+        self.running = False
+
+    def _run(self):
+        try:
+            info = updater.latest_release(RELEASE.get("repo", ""), updater.github_token(BASE))
+            newer = updater.parse_version(info["version"]) > updater.parse_version(APP_VERSION)
+            res = {"latest": info["version"], "update_available": newer,
+                   "notes": info["notes"], "url": info["url"], "error": None}
+        except Exception as exc:                      # offline, no token, no releases yet
+            res = {"latest": None, "update_available": False, "notes": "",
+                   "url": "", "error": str(exc)}
+        with self.lock:
+            self.result, self.checked_at, self.running = res, time.time(), False
+
+    def get(self, refresh: bool = False) -> dict:
+        enabled = bool(RELEASE.get("repo")) and local_settings().get("update_check", True)
+        if not enabled:
+            return {"latest": None, "update_available": False, "notes": "", "url": "",
+                    "error": None, "disabled": True}
+        with self.lock:
+            stale = refresh or time.time() - self.checked_at > self.EVERY
+            if stale and not self.running:
+                self.running = True
+                threading.Thread(target=self._run, daemon=True).start()
+            return {**self.result, "checking": self.running, "disabled": False}
+
+
+update_check = UpdateCheck()
+
+
+def _install_kind() -> str:
+    if (BASE / ".git").exists():
+        return "git"
+    return "release" if (BASE / "MANIFEST.json").exists() else "unpacked"
+
+
+@app.get("/api/version")
+def version(refresh: bool = False):
+    kind = _install_kind()
+    return {
+        "version": APP_VERSION,
+        "install": kind,
+        # The button only shows when the launcher can restart the app after.
+        "can_self_update": kind == "release" and getattr(app.state, "self_update", False),
+        "local_overrides": config.local_files(),
+        "config_errors": list(config.errors.values()),
+        **update_check.get(refresh),
+    }
+
+
+@app.post("/api/update")
+def request_update(x_webuilt_action: str | None = Header(None)):
+    """Stop the app so the launcher can install the update and restart it.
+
+    The custom header can't be sent by another website without a CORS
+    preflight, which this app never grants, so a page you happen to be
+    browsing can't trigger this.
+    """
+    if x_webuilt_action != "update":
+        raise HTTPException(400, "Missing X-WeBuilt-Action: update")
+    if _install_kind() != "release" or not getattr(app.state, "self_update", False):
+        raise HTTPException(409, "This copy can't update itself; see README.")
+    stop = getattr(app.state, "request_update", None)
+    if stop is None:
+        raise HTTPException(409, "Not started by the launcher.")
+    threading.Timer(0.5, stop).start()       # let this response reach the page first
+    return {"ok": True, "message": "Updating; the app will restart by itself."}
+
 
 @app.get("/")
 def index():
@@ -473,6 +674,9 @@ async def quote_endpoint(
         raise HTTPException(500, f"Pricing config problem: {exc}") from exc
 
     payload = quote.to_dict()
+    payload["app_version"] = APP_VERSION
+    # A broken edit to a config file is reported on every quote until fixed.
+    payload["warnings"] = list(config.errors.values()) + payload["warnings"]
     payload["files"] = file_meta
     payload["file"] = {
         "name": (file_meta[0]["name"] if len(file_meta) == 1
@@ -585,6 +789,9 @@ def quote_manual(body: ManualQuote):
         raise HTTPException(500, f"Pricing config problem: {exc}") from exc
 
     payload = quote.to_dict()
+    payload["app_version"] = APP_VERSION
+    # A broken edit to a config file is reported on every quote until fixed.
+    payload["warnings"] = list(config.errors.values()) + payload["warnings"]
     payload["file"] = {"name": body.label or "manual entry",
                        "parsed_by": "manual entry"}
 
@@ -609,7 +816,7 @@ def list_orders(limit: int = 50):
             "SELECT id, receipt_no, created_at, customer_name, filename, printer,"
             " materials, grams, hours, total, currency, est_margin, p_success,"
             " outcome, payment_status, payment_method, paid_at,"
-            " labour, contingency, profit"
+            " labour, contingency, profit, app_version"
             " FROM quotes ORDER BY id DESC LIMIT ?",
             (min(limit, 500),),
         ).fetchall()

@@ -61,7 +61,7 @@ def main():
          "; estimated printing time (normal mode) = 2h 5m 0s\n"
          "; filament_type = PLA\n"
          "; printer_model = Bambu Lab P1S\n")
-    (FX / "orca_with_thumbnail.gcode").write_text(g)
+    (FX / "orca_with_thumbnail.gcode").write_text(g, encoding="utf-8")
     print("written:", "bambu_two_plates.gcode.3mf", "orca_with_thumbnail.gcode")
 
 

@@ -187,7 +187,7 @@ def test_locales_have_the_same_keys_and_placeholders():
     """A key missing from th.yaml would silently show English; a placeholder
     typo would crash a receipt. Catch both here."""
     import string, yaml
-    loc = {l: yaml.safe_load((ROOT / "locales" / f"{l}.yaml").read_text())
+    loc = {l: yaml.safe_load((ROOT / "locales" / f"{l}.yaml").read_text(encoding="utf-8"))
            for l in ("en", "th")}
     assert set(loc["en"]) == set(loc["th"]), set(loc["en"]) ^ set(loc["th"])
     fields = lambda s: {f for _, f, _, _ in string.Formatter().parse(s) if f}

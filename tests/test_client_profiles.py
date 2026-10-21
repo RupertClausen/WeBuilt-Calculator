@@ -7,7 +7,7 @@ import pricing
 from slicefile import FilamentUse, SlicedJob
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CFG = {k: yaml.safe_load((ROOT / "config" / f"{k}.yaml").read_text())
+CFG = {k: yaml.safe_load((ROOT / "config" / f"{k}.yaml").read_text(encoding="utf-8"))
        for k in ("pricing", "printers", "filaments")}
 
 
