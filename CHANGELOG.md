@@ -3,7 +3,7 @@
 What changed in each version. The newest section is shown in the app as
 **What's new** when the update is offered.
 
-## [Unreleased]
+## [1.1.0] - 2026-10-22
 
 ### Quoting
 - Discounts: pick a shared preset (Repeat customer 10%, Club member 15%) or a
