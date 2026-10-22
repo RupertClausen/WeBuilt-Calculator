@@ -3,6 +3,12 @@
 What changed in each version. The newest section is shown in the app as
 **What's new** when the update is offered.
 
+## [Unreleased]
+
+### Fixes
+- Starting the app on Linux no longer prints the browser's internal error
+  messages into the app window.
+
 ## [1.0.0] - 2026-10-21
 
 First release for the team.

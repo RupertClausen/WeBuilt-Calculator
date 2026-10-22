@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -31,6 +33,26 @@ def free_port(start: int, tries: int = 10) -> int:
             except OSError:
                 continue
     raise SystemExit(f"No free port between {start} and {start + tries - 1}.")
+
+
+def open_browser(url: str) -> None:
+    """Open the app in the browser without the browser's own chatter.
+
+    On Linux, xdg-open starts Chrome/Chromium with this window as its output,
+    so its internal messages ("zygote … Broken pipe") would land here and
+    look like the app failing. Send them nowhere instead. Windows opens the
+    browser through the shell, which prints nothing.
+    """
+    opener = shutil.which("xdg-open") if sys.platform.startswith("linux") else None
+    if opener:
+        try:
+            subprocess.Popen([opener, url], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                             start_new_session=True)
+            return
+        except OSError:
+            pass
+    webbrowser.open(url)
 
 
 def main() -> int:
@@ -62,7 +84,7 @@ def main() -> int:
         def open_when_ready():
             for _ in range(50):
                 if server.started:
-                    webbrowser.open(url)
+                    open_browser(url)
                     return
                 time.sleep(0.1)
         threading.Thread(target=open_when_ready, daemon=True).start()
