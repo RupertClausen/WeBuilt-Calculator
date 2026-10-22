@@ -197,6 +197,14 @@
     <div><label for="postproc">Post-processing (min)</label><input type="number" id="postproc" min="0" value="0"></div>
     <div><label for="profile">Client</label><select id="profile"></select></div>
     <div><label for="prep">File prep (min)</label><input type="number" id="prep" min="0" placeholder="profile default"></div>
+    <div><label for="disc">Discount</label><select id="disc"></select></div>
+  </div>
+  <div id="disc-oneoff" class="controls hidden" style="margin-top:0">
+    <div><label for="disc-val">Discount</label><input type="number" id="disc-val" min="0" step="any" placeholder="e.g. 10"></div>
+    <div><label for="disc-unit">as</label>
+      <select id="disc-unit"><option value="percent">% off</option><option value="amount">฿ off</option></select></div>
+    <div style="grid-column: span 2"><label for="disc-reason">Reason (shown on the receipt)</label>
+      <input type="text" id="disc-reason" placeholder="e.g. Friend of the club"></div>
   </div>
   <div class="hint" id="profile-hint"></div>
 
@@ -231,6 +239,7 @@ async function loadOptions() {
   fill($('#rush'), opts.rush_tiers, opts.default_rush);
   fill($('#delivery'), opts.delivery_options, opts.default_delivery);
   fill($('#profile'), opts.client_profiles, opts.default_client_profile);
+  fillDiscounts();
   addMaterialRow();
   showProfileHint();
   setMode('upload');
@@ -287,6 +296,28 @@ async function startUpdate(fromVersion) {
 
 loadVersion();
 setInterval(() => loadVersion(), 30 * 60 * 1000);
+
+// --- discounts ----------------------------------------------------------
+function fillDiscounts() {
+  const d = opts.discounts || { presets: [], allow_one_off: false };
+  const items = [`<option value="">No discount</option>`].concat(
+    d.presets.map(p => `<option value="${esc(p.id)}">${esc(p.label)} (${
+      p.percent != null ? p.percent + '%' : '฿' + p.amount})</option>`));
+  if (d.allow_one_off) items.push(`<option value="__oneoff">One-off…</option>`);
+  $('#disc').innerHTML = items.join('');
+  $('#disc').onchange = () =>
+    $('#disc-oneoff').classList.toggle('hidden', $('#disc').value !== '__oneoff');
+}
+
+function discountFields() {
+  const v = $('#disc').value;
+  if (!v) return {};
+  if (v !== '__oneoff') return { discount: v };
+  const n = parseFloat($('#disc-val').value);
+  if (!(n > 0)) return {};
+  return { [$('#disc-unit').value === 'percent' ? 'discount_percent' : 'discount_amount']: n,
+           discount_reason: $('#disc-reason').value.trim() || null };
+}
 
 // --- client profile ---------------------------------------------------
 function currentProfile() {
@@ -423,6 +454,7 @@ function sharedOptions() {
     client_profile: $('#profile').value,
   };
   if ($('#prep').value !== '') o.prep_minutes = +$('#prep').value;
+  Object.assign(o, discountFields());
   for (const [k, id] of [['customer_name', '#c-name'], ['customer_contact', '#c-contact'],
                          ['notes', '#c-notes'], ['receipt_no', '#c-receipt']]) {
     const val = $(id).value.trim();
@@ -441,7 +473,7 @@ $('#go').onclick = async () => {
       fd.append('files', c.file);
       fd.append('copies', c.copies);
     }
-    for (const [k, v] of Object.entries(sharedOptions())) fd.append(k, v);
+    for (const [k, v] of Object.entries(sharedOptions())) if (v != null) fd.append(k, v);
     req = fetch('/api/quote', { method: 'POST', body: fd });
   } else {
     req = fetch('/api/quote/manual', {
@@ -493,7 +525,11 @@ function economicsTable(e, cur) {
       ${row('Contingency', e.contingency, 'slicer estimate error — not profit')}
       ${row('Rush premium', e.rush_premium)}
       ${row('Rate adjustment', e.rate_adjustment)}
-      ${row(`Profit (${e.profit_margin * 100}%)`, e.profit, 'what the business keeps', 'profit')}
+      ${row(`Profit (${e.profit_margin * 100}%)`, e.profit, e.discount ? 'before the discount' : 'what the business keeps', e.discount ? '' : 'profit')}
+      ${row('Discount', e.discount, 'comes out of profit first, then contingency and rush premium')}
+      ${e.discount ? row('Profit after discount', e.profit_after_discount || 0.0001,
+            e.profit_after_discount < 0 ? 'the discount went past the profit' : 'what the business keeps',
+            e.profit_after_discount < 0 ? 'neg' : 'profit') : ''}
       ${row('Delivery', e.delivery, 'passed through')}
       ${row('Rounding / minimum', e.rounding)}
       <tr class="sum"><td>Total</td><td class="amt">${money(e.total, cur)}</td></tr>
@@ -550,7 +586,8 @@ function render(d) {
       <span class="chip">${b.order.plates} plate${b.order.plates > 1 ? 's' : ''} from ${b.order.files} file${b.order.files > 1 ? 's' : ''}</span>
       <span class="chip">${(Math.min(...b.plates.map(x => x.risk.p_success_first_try)) * 100).toFixed(1)}% first-try success${b.plates.length > 1 ? ' (worst plate)' : ''}</span>
       <span class="chip">${b.client.label}</span>
-      <span class="chip">profit ${money(b.economics.profit, cur)} (${b.economics.profit_margin * 100}%)</span>
+      <span class="chip">profit ${money(b.economics.profit_after_discount ?? b.economics.profit, cur)}${
+        b.economics.discount ? ' after discount' : ` (${b.economics.profit_margin * 100}%)`}</span>
       <span class="chip">parsed via ${d.file.parsed_by}</span>
     </div>
     ${economicsTable(b.economics, cur)}

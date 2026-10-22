@@ -256,6 +256,58 @@ def round_up(value: float, step: float) -> float:
     return math.ceil(value / step) * step
 
 
+class QuoteInputError(ValueError):
+    """Something wrong with what the person quoting asked for (not with the
+    config): shown back to them as-is."""
+
+
+def resolve_discount(request: dict | None, pricing: dict) -> dict | None:
+    """Turn a quote's discount request into one validated discount.
+
+    `request` is {"preset": key} or {"percent": n, "reason": text} or
+    {"amount": n, "reason": text}. Returns None for no discount.
+    """
+    if not request or not any(request.get(k) not in (None, "", 0)
+                              for k in ("preset", "percent", "amount")):
+        return None
+    cfg = pricing.get("discounts") or {}
+    preset_key = request.get("preset")
+    one_off = {k: request.get(k) for k in ("percent", "amount")
+               if request.get(k) not in (None, "", 0)}
+
+    if preset_key and one_off:
+        raise QuoteInputError("Choose either a discount preset or a one-off "
+                              "discount, not both.")
+    if preset_key:
+        spec = (cfg.get("presets") or {}).get(preset_key)
+        if spec is None:
+            raise QuoteInputError(f"Unknown discount '{preset_key}'.")
+        source, label, label_th = preset_key, spec.get("label", preset_key), spec.get("label_th")
+        values = {k: spec[k] for k in ("percent", "amount") if spec.get(k) is not None}
+        if len(values) != 1:
+            raise ValueError(f"Discount preset '{preset_key}' needs exactly one of "
+                             "percent or amount")       # config problem
+    else:
+        if not cfg.get("allow_one_off", True):
+            raise QuoteInputError("Only the preset discounts can be used.")
+        if len(one_off) != 1:
+            raise QuoteInputError("Give a discount as a percentage or an amount, not both.")
+        reason = (request.get("reason") or "").strip()
+        source, label, label_th, values = "one-off", reason, reason or None, one_off
+
+    kind, value = next(iter(values.items()))
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise QuoteInputError(f"Discount {kind} must be a number.") from None
+    if kind == "percent" and not 0 < value < 100:
+        raise QuoteInputError("A percentage discount must be above 0 and below 100.")
+    if kind == "amount" and value <= 0:
+        raise QuoteInputError("A discount amount must be above 0.")
+    return {"source": source, "label": label, "label_th": label_th,
+            "kind": kind, "value": value}
+
+
 def build_quote(
     items,
     *,
@@ -269,6 +321,7 @@ def build_quote(
     postproc_minutes: float = 0.0,
     client_profile: str | None = None,
     prep_minutes: float | None = None,
+    discount: dict | None = None,
 ) -> Quote:
     """Price an order of one or more plates.
 
@@ -468,6 +521,30 @@ def build_quote(
     after_multipliers = before_profit / (1.0 - profit_margin)
     profit = after_multipliers - before_profit
 
+    # --- discount ---------------------------------------------------------
+    # Taken off the price before delivery, never below break-even: what the
+    # job really costs (filament at supplier price, power, wear, machine
+    # time, expected reprints) plus the labour charges. It may eat profit,
+    # contingency and a rush premium, never real costs.
+    disc = resolve_discount(discount, pricing)
+    discount_amount = discount_requested = 0.0
+    discount_capped = False
+    break_even = (agg["material_cost"] + agg["electricity"] + agg["maintenance"]
+                  + agg["machine"] + (agg["risked"] - agg["unrisked"])
+                  + setup + plates_charge + prep + postproc)
+    if disc and after_multipliers > 0.004:
+        discount_requested = (after_multipliers * disc["value"] / 100.0
+                              if disc["kind"] == "percent" else disc["value"])
+        room = max(after_multipliers - break_even, 0.0)
+        discount_amount = min(discount_requested, room)
+        discount_capped = discount_amount < discount_requested - 0.005
+        if discount_capped:
+            warnings.append(
+                f"Discount reduced from {pricing.get('currency', 'THB')}"
+                f"{discount_requested:.2f} to {discount_amount:.2f}: any more "
+                "would price this job below what it costs.")
+    after_multipliers -= discount_amount
+
     del_key = delivery or pricing.get("default_delivery", "pickup")
     del_spec = pricing["delivery_options"].get(del_key) or {"fee": 0, "label": del_key}
     delivery_fee = float(del_spec["fee"])
@@ -541,6 +618,14 @@ def build_quote(
         lines.append(LineItem(
             "profit", "Profit margin", profit,
             f"{profit_margin*100:g}% of the price before delivery"))
+    if discount_amount > 0.004:
+        what = (f"{disc['value']:g}% off" if disc["kind"] == "percent"
+                else f"{disc['value']:.2f} off")
+        if discount_capped:
+            what += f", capped at break-even (asked {discount_requested:.2f})"
+        lines.append(LineItem(
+            "discount", "Discount" + (f" — {disc['label']}" if disc["label"] else ""),
+            -discount_amount, what))
     if delivery_fee:
         lines.append(LineItem("delivery", del_spec.get("label", del_key), delivery_fee))
 
@@ -581,6 +666,11 @@ def build_quote(
         "rate_adjustment": round(amt.get("client_price", 0.0), 2),
         "profit": round(profit, 2),
         "profit_margin": profit_margin,
+        # The discount comes out of what the business keeps: profit first,
+        # then contingency and rush premium. Negative here means it went
+        # past the profit into those.
+        "discount": round(-discount_amount, 2),
+        "profit_after_discount": round(profit - discount_amount, 2),
         "delivery": round(delivery_fee, 2),
         "rounding": round(rounding_delta, 2),
         "total": round(total, 2),
@@ -607,6 +697,13 @@ def build_quote(
             "price_multiplier": prof_price,
         },
         "economics": economics,
+        "discount": None if not disc else {
+            **disc,
+            "requested": round(discount_requested, 2),
+            "applied": round(discount_amount, 2),
+            "capped": discount_capped,
+            "break_even": round(break_even, 2),      # internal; never on receipts
+        },
         "margin": {
             "estimated_direct_cost": round(true_cost, 2),
             "estimated_margin": round(margin, 2),

@@ -5,6 +5,12 @@ What changed in each version. The newest section is shown in the app as
 
 ## [Unreleased]
 
+### Quoting
+- Discounts: pick a shared preset (Repeat customer 10%, Club member 15%) or a
+  one-off percentage or baht amount with a reason. Never below the job's
+  break-even, never on delivery. Shown on receipts as its own line, in
+  English and Thai.
+
 ### Fixes
 - Starting the app on Linux no longer prints the browser's internal error
   messages into the app window.

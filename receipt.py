@@ -269,6 +269,19 @@ def build_view(
     add("client_price", t("adjust_label"))
     add("profit", t("profit_label"),
         t("profit_detail", pct=pct(rates.get("profit_margin_pct", 0))))
+
+    # A capped discount shows the baht actually given, not the percentage
+    # asked for: "60% off" next to a smaller amount wouldn't add up, and the
+    # cap itself (break-even) is the shop's business.
+    dsc = bd.get("discount") or {}
+    if dsc:
+        name = (dsc.get("label_th") if lang == "th" and dsc.get("label_th")
+                else dsc.get("label"))
+        show_pct = dsc.get("kind") == "percent" and not dsc.get("capped")
+        add("discount",
+            t("discount_label_named", name=name) if name else t("discount_label"),
+            t("discount_detail_percent", pct=pct(dsc["value"])) if show_pct
+            else t("discount_detail_amount", amount=baht(dsc.get("applied", 0))))
     add("delivery", t("delivery_label"), delivery_name)
     if rates.get("minimum_applied"):
         add("rounding", t("minimum_label"),

@@ -233,6 +233,38 @@ the 222.86 g PETG reference job that is −฿41.72. Raise
 `flat_standard_price_per_kg`, or mark the expensive brands `restocked: false`
 if you don't actually load them for standard jobs.
 
+## Discounts
+
+A quote can take one discount: a **preset** from `discounts.presets` in
+`config/pricing.yaml` ("Repeat customer 10%", "Club member 15%"), or a
+**one-off** typed in when quoting, with a reason that is printed on the
+receipt. Either is a percentage or a fixed baht amount.
+`allow_one_off: false` limits everyone to the presets.
+
+```
+price before delivery = (costs + labour + risk) × contingency × rush ÷ (1 − margin)
+discount              = taken off that price, never below break-even
+total                 = price − discount + delivery, then minimum, then rounding
+```
+
+**Never below break-even.** Break-even is filament at what you pay for it,
+electricity, wear parts, machine time, the failure allowance and the labour
+charges. A discount can eat the profit, the contingency and a rush premium,
+but not real costs. If it would go further it is capped there, and the
+person quoting sees a warning. **Delivery is never discounted.**
+
+On the receipt it is its own line: "Discount — Repeat customer, 10% off the
+price before delivery" ("ส่วนลด — ลูกค้าประจำ" in Thai). A capped discount
+shows the baht amount actually given, because the percentage asked for would
+not match the number, and the cap itself is the shop's business.
+
+Internally, the money table shows the discount and **profit after discount**,
+in red when the discount went past the profit. The order log stores the
+discount, its label, and the profit actually kept.
+
+Presets are config, so changing or adding one is a patch release, like a
+price change.
+
 ## Client profiles — replacing the faculty exponent
 
 The old calculator gave engineering `expo 1.3` and architecture `expo 1.5`.

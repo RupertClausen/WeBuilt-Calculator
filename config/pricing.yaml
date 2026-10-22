@@ -216,3 +216,38 @@ default_client_profile: general
 
 # Billed at labour_rate_per_hour, same as post-processing.
 # Set per quote to override the profile default.
+
+# ---------------------------------------------------------------------------
+# Discounts
+# ---------------------------------------------------------------------------
+# A quote can take ONE discount: a preset from this list, or (if allowed) a
+# one-off typed in when quoting. Either kind is a percentage or a fixed baht
+# amount, taken off the price before delivery. Delivery is never discounted.
+#
+# A discount never takes the price below break-even: filament at what you
+# pay for it, electricity, wear, machine time, the failure allowance and the
+# labour charges. It can eat into profit, contingency and a rush premium,
+# but not into real costs. If a discount asks for more, it is capped there,
+# the quote warns you, and the receipt shows the amount actually given.
+#
+# On the receipt it is its own line: "Discount — <label>  −฿…", using
+# label_th on Thai receipts.
+#
+# Each preset needs a label and exactly one of `percent` or `amount`.
+
+discounts:
+  allow_one_off: true          # false = only the presets below can be used
+  presets:
+    repeat:
+      label: "Repeat customer"
+      label_th: "ลูกค้าประจำ"
+      percent: 10
+    club:
+      label: "Club member"
+      label_th: "สมาชิกชมรม"
+      percent: 15
+    # A fixed-amount example:
+    # first_order:
+    #   label: "First order"
+    #   label_th: "ออเดอร์แรก"
+    #   amount: 30

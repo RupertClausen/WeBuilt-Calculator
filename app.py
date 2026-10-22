@@ -251,6 +251,9 @@ def init_db() -> None:
             ("profit", "REAL"),
             # Which release (and so which price list) produced the quote.
             ("app_version", "TEXT"),
+            # The discount given and why; `profit` is what was kept after it.
+            ("discount", "REAL"),
+            ("discount_label", "TEXT"),
         ):
             if col not in have:
                 conn.execute(f"ALTER TABLE quotes ADD COLUMN {col} {ddl}")
@@ -364,8 +367,9 @@ def log_quote(
                 rush, delivery, total, currency, est_cost, est_margin,
                 p_success, risk_factor, detail_json,
                 receipt_no, customer_name, customer_contact, notes,
-                payment_status, labour, contingency, profit, app_version)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                payment_status, labour, contingency, profit, app_version,
+                discount, discount_label)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 filename,
@@ -390,8 +394,11 @@ def log_quote(
                 "unpaid",
                 econ.get("labour", {}).get("total"),
                 econ.get("contingency"),
-                econ.get("profit"),
+                econ.get("profit_after_discount", econ.get("profit")),
                 APP_VERSION,
+                -(econ.get("discount") or 0.0),
+                (bd.get("discount") or {}).get("label") or (
+                    (bd.get("discount") or {}).get("source")),
             ),
         )
         quote_id = cur.lastrowid
@@ -562,6 +569,14 @@ def options():
             for k, v in pc.get("client_profiles", {}).items()
         ],
         "default_client_profile": pc.get("default_client_profile"),
+        "discounts": {
+            "allow_one_off": (pc.get("discounts") or {}).get("allow_one_off", True),
+            "presets": [
+                {"id": k, "label": v.get("label", k), "label_th": v.get("label_th"),
+                 "percent": v.get("percent"), "amount": v.get("amount")}
+                for k, v in ((pc.get("discounts") or {}).get("presets") or {}).items()
+            ],
+        },
         "materials": sorted((config["filaments"].get("materials") or {}).keys()),
         "labour_rate_per_hour": pc.get("labour_rate_per_hour"),
         "currency": pc.get("currency", "THB"),
@@ -598,6 +613,10 @@ async def quote_endpoint(
     customer_contact: str | None = Form(None),
     notes: str | None = Form(None),
     receipt_no: str | None = Form(None),
+    discount: str | None = Form(None, description="preset key"),
+    discount_percent: float | None = Form(None),
+    discount_amount: float | None = Form(None),
+    discount_reason: str | None = Form(None),
     save: bool = Form(True),
 ):
     """Quote an order of one or more sliced files.
@@ -667,7 +686,11 @@ async def quote_endpoint(
             postproc_minutes=postproc_minutes or 0.0,
             client_profile=client_profile,
             prep_minutes=prep_minutes,
+            discount={"preset": discount or None, "percent": discount_percent,
+                      "amount": discount_amount, "reason": discount_reason},
         )
+    except pricing.QuoteInputError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except (KeyError, ValueError) as exc:
         raise HTTPException(500, f"Pricing config problem: {exc}") from exc
 
@@ -736,6 +759,12 @@ class ManualQuote(BaseModel):
     customer_contact: str | None = None
     notes: str | None = None
     receipt_no: str | None = None
+
+    # --- discount: a preset key, or a one-off percent/amount with a reason ---
+    discount: str | None = None
+    discount_percent: float | None = None
+    discount_amount: float | None = None
+    discount_reason: str | None = None
     save: bool = True
 
     @property
@@ -782,7 +811,11 @@ def quote_manual(body: ManualQuote):
             postproc_minutes=body.postproc_minutes,
             client_profile=body.client_profile,
             prep_minutes=body.prep_minutes,
+            discount={"preset": body.discount or None, "percent": body.discount_percent,
+                      "amount": body.discount_amount, "reason": body.discount_reason},
         )
+    except pricing.QuoteInputError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except (KeyError, ValueError) as exc:
         raise HTTPException(500, f"Pricing config problem: {exc}") from exc
 
@@ -814,7 +847,7 @@ def list_orders(limit: int = 50):
             "SELECT id, receipt_no, created_at, customer_name, filename, printer,"
             " materials, grams, hours, total, currency, est_margin, p_success,"
             " outcome, payment_status, payment_method, paid_at,"
-            " labour, contingency, profit, app_version"
+            " labour, contingency, profit, app_version, discount, discount_label"
             " FROM quotes ORDER BY id DESC LIMIT ?",
             (min(limit, 500),),
         ).fetchall()

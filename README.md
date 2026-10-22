@@ -52,6 +52,14 @@ close it, or press Ctrl+C in it, to stop the app.
 Only your own computer can reach it. Other people on the same network
 cannot.
 
+### Discounts
+
+Pick one from **Discount** before quoting: a shared preset (like *Repeat
+customer*) or **One-off…** with your own percentage or baht amount and a
+reason, which prints on the receipt. A discount never takes the price below
+what the job costs; if you ask for more, it's capped and the app tells you.
+Delivery is never discounted.
+
 ## Updates
 
 When a new version is out, a blue bar appears at the top of the app. Click
