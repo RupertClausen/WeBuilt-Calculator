@@ -3,7 +3,7 @@
 What changed in each version. The newest section is shown in the app as
 **What's new** when the update is offered.
 
-## [Unreleased]
+## [1.1.1] - 2026-10-23
 
 ### Receipt numbers
 - Typing a receipt number that's already used no longer stops the quote: it
