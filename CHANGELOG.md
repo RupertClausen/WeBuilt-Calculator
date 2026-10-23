@@ -3,6 +3,16 @@
 What changed in each version. The newest section is shown in the app as
 **What's new** when the update is offered.
 
+## [Unreleased]
+
+### Receipt numbers
+- Typing a receipt number that's already used no longer stops the quote: it
+  is saved under the next free number, with a warning saying which.
+- The automatic number only continues from numbers the app chose itself, and
+  steps over any that are taken. A hand-typed outlier like WB-2610-999 no
+  longer makes every following receipt 1000-something.
+- The receipt number field clears after each saved quote.
+
 ## [1.1.0] - 2026-10-22
 
 ### Quoting

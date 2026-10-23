@@ -27,3 +27,8 @@ dist/
 
 # Per-machine Claude Code settings
 .claude/settings.local.json
+
+# Editor swap and backup files
+*.swp
+*.swo
+*~

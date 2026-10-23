@@ -137,13 +137,58 @@ def test_receipt_numbers_continue_after_the_sheet():
     print(f"  numbering       {a} then {b} (floor for {yymm} is {floor:03d})")
 
 
-def test_duplicate_receipt_number_rejected():
+def _month_stem():
+    from datetime import datetime
+    yymm = datetime.now(receipt_doc.zone("Asia/Bangkok")).strftime("%y%m")
+    return f"{appmod.config['receipt'].get('receipt_prefix', 'WB')}-{yymm}-", yymm
+
+
+def test_taken_number_warns_instead_of_blocking():
+    """Typing a number that's already used must never stop the quote."""
     save_upload(["orca_tiny_pla.gcode"], receipt_no="WB-TEST-001")
     files = [("files", ("x.gcode", (FX / "orca_tiny_pla.gcode").read_bytes()))]
     r = client.post("/api/quote", files=files,
                     data={"save": "true", "receipt_no": "WB-TEST-001"})
-    assert r.status_code == 409
-    print("  duplicates      reusing a receipt number -> 409")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["receipt_no"] != "WB-TEST-001" and d["quote_id"]
+    assert "WB-TEST-001 is already used" in d["warnings"][0]
+    assert d["receipt_no"] in d["warnings"][0]
+    print(f"  taken number    quote still made; saved as {d['receipt_no']} with a warning")
+
+
+def test_counter_ignores_hand_typed_numbers():
+    """A typed WB-YYMM-999 must not push every later receipt past 1000, and
+    the counter must step over numbers someone typed in its path."""
+    stem, _ = _month_stem()
+    first = save_upload(["orca_tiny_pla.gcode"])["receipt_no"]
+    n = int(first.rsplit("-", 1)[1])
+    save_upload(["orca_tiny_pla.gcode"], receipt_no=f"{stem}999")       # outlier
+    save_upload(["orca_tiny_pla.gcode"], receipt_no=f"{stem}{n + 1:03d}")  # in the way
+    nxt = save_upload(["orca_tiny_pla.gcode"])["receipt_no"]
+    assert nxt == f"{stem}{n + 2:03d}", (first, nxt)
+    print(f"  counter         {first} -> typed 999 and {n + 1:03d} -> next is {nxt}")
+
+
+def test_rows_from_before_the_flag_count_as_typed():
+    """Older quotes don't record who chose the number; treat them as typed,
+    so a past outlier can't keep the counter high."""
+    import sqlite3
+    stem, yymm = _month_stem()
+    floor = int((appmod.config["receipt"].get("next_number_floor") or {}).get(yymm, 1))
+    with sqlite3.connect(appmod.DB_PATH) as c:
+        c.execute("UPDATE quotes SET receipt_auto = NULL")       # as if all legacy
+    nxt = save_upload(["orca_tiny_pla.gcode"])["receipt_no"]
+    n = int(nxt.rsplit("-", 1)[1])
+    assert n >= floor and n < 999, nxt
+    print(f"  legacy rows     counter restarts at the floor and skips taken -> {nxt}")
+
+
+def test_blank_number_means_automatic():
+    d = save_upload(["orca_tiny_pla.gcode"], receipt_no="   ")
+    assert d["receipt_no"].startswith(_month_stem()[0]) and not any(
+        "already used" in w for w in d["warnings"])
+    print(f"  blank number    whitespace -> automatic {d['receipt_no']}")
 
 
 def test_method_text_never_overclaims():

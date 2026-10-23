@@ -254,6 +254,9 @@ def init_db() -> None:
             # The discount given and why; `profit` is what was kept after it.
             ("discount", "REAL"),
             ("discount_label", "TEXT"),
+            # 1 when the app chose the receipt number, NULL when typed by
+            # hand. Only app-chosen numbers move the automatic counter.
+            ("receipt_auto", "INTEGER"),
         ):
             if col not in have:
                 conn.execute(f"ALTER TABLE quotes ADD COLUMN {col} {ddl}")
@@ -314,20 +317,33 @@ def local_now() -> datetime:
 
 
 def next_receipt_no(conn: sqlite3.Connection, when: datetime) -> str:
-    """WB-YYMM-NNN, restarting each month, never below the configured floor."""
+    """WB-YYMM-NNN, restarting each month.
+
+    Continues from the last number the APP issued this month, never below
+    the configured floor, and steps over any number already taken. Numbers
+    typed by hand don't move it: a one-off WB-2610-999 must not make every
+    following receipt 1000-something.
+    """
     rc = config["receipt"]
     prefix = rc.get("receipt_prefix", "WB")
     yymm = when.strftime("%y%m")
     stem = f"{prefix}-{yymm}-"
-    highest = 0
-    for (no,) in conn.execute(
-        "SELECT receipt_no FROM quotes WHERE receipt_no LIKE ?", (stem + "%",)
+    taken: set[int] = set()
+    last_auto = 0
+    for no, auto in conn.execute(
+        "SELECT receipt_no, receipt_auto FROM quotes WHERE receipt_no LIKE ?",
+        (stem + "%",),
     ):
         tail = (no or "")[len(stem):]
         if tail.isdigit():
-            highest = max(highest, int(tail))
+            taken.add(int(tail))
+            if auto:
+                last_auto = max(last_auto, int(tail))
     floor = int((rc.get("next_number_floor") or {}).get(yymm, 1))
-    return f"{stem}{max(highest + 1, floor):03d}"
+    n = max(last_auto + 1, floor)
+    while n in taken:
+        n += 1
+    return f"{stem}{n:03d}"
 
 
 def log_quote(
@@ -338,7 +354,7 @@ def log_quote(
     delivery: str,
     customer: dict | None = None,
     thumbnails: dict[int, tuple[bytes, str]] | None = None,
-) -> tuple[int, str]:
+) -> tuple[int, str, str | None]:
     """Append a quote to the order log.
 
     For a multi-plate order the per-plate risk numbers differ, so the summary
@@ -360,7 +376,19 @@ def log_quote(
         # IMMEDIATE takes the write lock before reading the highest receipt
         # number, so two quotes saved at once cannot get the same number.
         conn.execute("BEGIN IMMEDIATE")
-        receipt_no = customer.get("receipt_no") or next_receipt_no(conn, local_now())
+        # A typed number that's already used must not stop the quote: save
+        # it under the next free number instead and say so.
+        note = None
+        typed = (customer.get("receipt_no") or "").strip()
+        receipt_no, auto = typed, False
+        if typed and conn.execute("SELECT 1 FROM quotes WHERE receipt_no = ?",
+                                  (typed,)).fetchone():
+            receipt_no = ""
+        if not receipt_no:
+            receipt_no, auto = next_receipt_no(conn, local_now()), True
+            if typed:
+                note = (f"Receipt number {typed} is already used, so this "
+                        f"quote was saved as {receipt_no}.")
         cur = conn.execute(
             """INSERT INTO quotes
                (created_at, filename, printer, materials, grams, hours, plates,
@@ -402,17 +430,14 @@ def log_quote(
             ),
         )
         quote_id = cur.lastrowid
+        if auto:
+            conn.execute("UPDATE quotes SET receipt_auto = 1 WHERE id = ?", (quote_id,))
         for plate, (data, mime) in (thumbnails or {}).items():
             conn.execute(
                 "INSERT INTO plate_thumbnails (quote_id, plate, mime, data)"
                 " VALUES (?,?,?,?)", (quote_id, plate, mime, data))
         conn.execute("COMMIT")
-        return quote_id, receipt_no
-    except sqlite3.IntegrityError as exc:
-        conn.execute("ROLLBACK")
-        raise HTTPException(
-            409, f"Receipt number {customer.get('receipt_no')} is already used."
-        ) from exc
+        return quote_id, receipt_no, note
     except Exception:
         conn.execute("ROLLBACK")
         raise
@@ -709,7 +734,7 @@ async def quote_endpoint(
 
     thumbs = plate_thumbnails(items)
     if save:
-        payload["quote_id"], payload["receipt_no"] = log_quote(
+        payload["quote_id"], payload["receipt_no"], number_note = log_quote(
             payload["file"]["name"], quote,
             chosen_printer, chosen_rush, chosen_delivery,
             customer={"customer_name": customer_name,
@@ -718,6 +743,8 @@ async def quote_endpoint(
             thumbnails=thumbs,
         )
         payload["receipt_url"] = f"/receipt/{payload['quote_id']}"
+        if number_note:
+            payload["warnings"].insert(0, number_note)
     attach_thumbnails(payload, thumbs, payload.get("quote_id"))
 
     return JSONResponse(payload)
@@ -827,7 +854,7 @@ def quote_manual(body: ManualQuote):
                        "parsed_by": "manual entry"}
 
     if body.save:
-        payload["quote_id"], payload["receipt_no"] = log_quote(
+        payload["quote_id"], payload["receipt_no"], number_note = log_quote(
             body.label or "manual entry", quote,
             chosen_printer, chosen_rush, chosen_delivery,
             customer={"customer_name": body.customer_name,
@@ -835,6 +862,8 @@ def quote_manual(body: ManualQuote):
                       "notes": body.notes, "receipt_no": body.receipt_no or None},
         )
         payload["receipt_url"] = f"/receipt/{payload['quote_id']}"
+        if number_note:
+            payload["warnings"].insert(0, number_note)
     attach_thumbnails(payload, {}, payload.get("quote_id"))   # manual: no pictures
 
     return JSONResponse(payload)

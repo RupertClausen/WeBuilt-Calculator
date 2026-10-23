@@ -493,6 +493,8 @@ $('#go').onclick = async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail
       : JSON.stringify(data.detail) || 'Request failed');
+    // A receipt number belongs to one quote; don't carry it into the next.
+    if (data.quote_id) $('#c-receipt').value = '';
     render(data);
   } catch (err) {
     $('#out').innerHTML = `<div class="warn err">${err.message}</div>`;
