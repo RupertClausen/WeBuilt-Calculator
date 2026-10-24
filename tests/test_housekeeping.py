@@ -1,5 +1,6 @@
 """Daily chores: backups, pruning, file retention, expired sessions."""
 import os, pathlib, sqlite3, sys, tempfile
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -38,7 +39,9 @@ def test_nothing_before_the_hour_then_once_a_day():
 
 def test_backup_is_a_working_copy():
     b = core.BACKUP_DIR / "orders-2026-11-01.db"
-    with sqlite3.connect(b) as copy, sqlite3.connect(core.DB_PATH) as live:
+    # closing(): `with sqlite3.connect()` alone commits but does NOT close, and
+    # on Windows an open file can't be deleted later by the pruning.
+    with closing(sqlite3.connect(b)) as copy:
         assert copy.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert copy.execute("SELECT COUNT(*) FROM quotes").fetchone()[0] >= 1
         tables = {r[0] for r in copy.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -53,6 +56,34 @@ def test_pruning_keeps_the_newest():
     names = sorted(p.name for p in core.BACKUP_DIR.glob("orders-*.db"))
     assert names == ["orders-2026-11-03.db", "orders-2026-11-04.db", "orders-2026-11-05.db"], names
     print(f"  pruning         keep 3 -> {names}")
+
+
+def test_undeletable_old_backup_does_not_stop_anything():
+    """Windows won't delete a file that's open somewhere. Pruning must skip it,
+    keep going, and still record the new backup."""
+    import pathlib as pl
+    real = pl.Path.unlink
+    # the oldest copy that exists now: the one pruning will try first
+    stuck = sorted(p.name for p in core.BACKUP_DIR.glob("orders-*.db"))[0]
+    def unlink(self, *a, **k):
+        if self.name == stuck:
+            raise PermissionError(13, "The process cannot access the file", str(self))
+        return real(self, *a, **k)
+    pl.Path.unlink = unlink
+    try:
+        did = housekeeping.run_once(at(8, 5))
+    finally:
+        pl.Path.unlink = real
+    assert did["backup"] == "orders-2026-11-08.db"
+    assert did["prune_skipped"] == [stuck] and stuck not in did["pruned"]
+    left = sorted(p.name for p in core.BACKUP_DIR.glob("orders-*.db"))
+    assert left[0] == stuck and len(left) == 3 + 1          # keep 3, plus the stuck one
+    st = core.get_state("housekeeping")
+    assert st["last_backup"] == "orders-2026-11-08.db" and st["prune_skipped"] == [stuck]
+    nxt = housekeeping.run_once(at(9, 5))                 # deletable again next day
+    assert stuck in nxt["pruned"] and "prune_skipped" not in core.get_state("housekeeping")
+    print(f"  locked file     {stuck} undeletable: skipped, others pruned, backup recorded; "
+          "removed next day")
 
 
 def test_cleanup_runs_daily_and_clears_sessions():
@@ -81,6 +112,7 @@ def test_backups_can_be_switched_off():
 if __name__ == "__main__":
     fns = [test_nothing_before_the_hour_then_once_a_day, test_backup_is_a_working_copy,
            test_pruning_keeps_the_newest, test_cleanup_runs_daily_and_clears_sessions,
+           test_undeletable_old_backup_does_not_stop_anything,
            test_backups_can_be_switched_off]                 # order matters here
     print(f"\nRunning {len(fns)} housekeeping tests\n")
     failed = 0

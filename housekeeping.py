@@ -42,12 +42,19 @@ def backup_database(when: datetime) -> str:
     return dest.name
 
 
-def prune_backups(keep: int) -> list[str]:
+def prune_backups(keep: int) -> tuple[list[str], list[str]]:
+    """Delete all but the newest `keep` backups. Returns (deleted, skipped).
+    A copy that can't be deleted (on Windows, one that is open somewhere) is
+    skipped and tried again next time; it never stops the rest."""
     copies = sorted(BACKUP_DIR.glob("orders-*.db"))
-    gone = copies[:-keep] if keep > 0 else []
-    for p in gone:
-        p.unlink(missing_ok=True)
-    return [p.name for p in gone]
+    deleted, skipped = [], []
+    for p in (copies[:-keep] if keep > 0 else []):
+        try:
+            p.unlink(missing_ok=True)
+            deleted.append(p.name)
+        except OSError:
+            skipped.append(p.name)
+    return deleted, skipped
 
 
 def run_once(now: datetime | None = None) -> dict:
@@ -63,13 +70,21 @@ def run_once(now: datetime | None = None) -> dict:
             and state.get("last_backup_day") != today:
         try:
             did["backup"] = backup_database(now)
-            did["pruned"] = prune_backups(int(bk.get("keep", 14)))
+            # Recorded as soon as it exists: tidying old copies afterwards
+            # must never make a good backup look like it didn't happen.
             state["last_backup_day"] = today
             state["last_backup"] = did["backup"]
             state.pop("backup_error", None)
         except Exception as exc:
             state["backup_error"] = f"{utcnow()}: {exc}"
             did["backup_error"] = str(exc)
+        else:
+            did["pruned"], skipped = prune_backups(int(bk.get("keep", 14)))
+            if skipped:
+                did["prune_skipped"] = skipped
+                state["prune_skipped"] = skipped
+            else:
+                state.pop("prune_skipped", None)
 
     if state.get("last_cleanup_day") != today:
         keep = int((srv.get("files") or {}).get("keep_days_after_closed", 90))
