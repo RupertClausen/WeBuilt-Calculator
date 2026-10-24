@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · WeBuilt Quote</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/nav.css">
+<style>
+  .panel + .panel { margin-top:16px; }
+  .panel h2 { margin-top:0; }
+  td .acts { display:flex; gap:6px; flex-wrap:wrap; }
+  td .acts button { padding:4px 9px; font-size:12px; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Admin</h1>
+  <div class="sub" id="ver">&nbsp;</div>
+  <div id="cfgErrors"></div>
+
+  <section class="panel" id="usersBox" hidden style="margin-top:20px">
+    <h2>Team accounts</h2>
+    <table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th class="hide-sm">Last login</th><th></th></tr></thead>
+      <tbody id="users"></tbody></table>
+    <h2 style="margin-top:22px">Add someone</h2>
+    <div class="row">
+      <div><label for="nu">Username</label><input id="nu" autocapitalize="none" placeholder="e.g. pim"></div>
+      <div><label for="nn">Name</label><input id="nn" placeholder="shown in the app"></div>
+      <div><label for="np">First password</label><input id="np" type="password" autocomplete="new-password"></div>
+      <div><label for="nr">Role</label><select id="nr"><option value="member">Member</option><option value="admin">Admin</option></select></div>
+      <div class="shrink"><button id="add">Add</button></div>
+    </div>
+    <div id="msgUsers" class="msg"></div>
+    <div class="sub">Give them the first password in person; they can change it under Account.</div>
+  </section>
+
+  <div class="grid2" style="margin-top:16px">
+    <section class="panel">
+      <h2>Google Sheet</h2>
+      <dl class="kv" id="sheet"></dl>
+      <div style="margin-top:12px"><button id="sync" class="ghost">Sync now</button></div>
+      <div id="msgSheet" class="msg"></div>
+    </section>
+    <section class="panel">
+      <h2>Housekeeping</h2>
+      <dl class="kv" id="hk"></dl>
+      <div style="margin-top:12px"><button id="runHk" class="ghost">Run now</button></div>
+      <div id="msgHk" class="msg"></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:16px" id="delBox" hidden>
+    <h2>Recently deleted orders</h2>
+    <table><thead><tr><th>Receipt</th><th>Customer</th><th class="num">Total</th>
+      <th class="hide-sm">Was</th><th>Deleted</th></tr></thead><tbody id="deleted"></tbody></table>
+    <div class="sub" style="margin-top:8px">Their receipt numbers are never issued again.</div>
+  </section>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+function setMsg(id, text, ok = true) {
+  const el = $(id); el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'bad');
+}
+const kv = rows => rows.filter(r => r[1] !== undefined && r[1] !== null && r[1] !== '')
+  .map(([k, v, cls]) => `<dt>${esc(k)}</dt><dd class="${cls || ''}">${esc(v)}</dd>`).join('');
+const size = n => n > 1073741824 ? (n / 1073741824).toFixed(2) + ' GB' : (n / 1048576).toFixed(1) + ' MB';
+
+async function loadStatus() {
+  const s = (await api('/api/admin/status')).data;
+  $('#ver').textContent = `Version ${s.version} · ${s.server_mode ? 'team server' : 'this computer only'}`;
+  $('#cfgErrors').innerHTML = s.config_errors.length
+    ? `<div class="warn">${s.config_errors.map(esc).join('<br>')}</div>` : '';
+  const sh = s.sheet;
+  $('#sheet').innerHTML = kv([
+    ['Mirror', sh.enabled ? 'On' : 'Off (sheets.enabled in local/server.yaml)'],
+    ['Tab', sh.tab],
+    ['Last synced', sh.last_ok ? bangkokDate(sh.last_ok) + ` · ${sh.rows} orders` : (sh.enabled ? 'not yet' : '')],
+    ['Waiting', sh.pending ? 'changes waiting to be written' : ''],
+    ['Problem', sh.error ? `${sh.error} (${bangkokDate(sh.error_at)})` : '', 'bad'],
+    ['Share the sheet with', sh.service_account],
+  ]);
+  $('#sync').disabled = !sh.enabled;
+  const hk = s.housekeeping || {};
+  const counts = Object.entries(s.orders_by_status).map(([k, n]) => `${k} ${n}`).join(' · ');
+  $('#hk').innerHTML = kv([
+    ['Orders', counts || 'none yet'],
+    ['Stored files', `${s.stored_files.count} · ${size(s.stored_files.bytes)}`],
+    ['Last backup', hk.last_backup || 'none yet'],
+    ['Backup problem', hk.backup_error, 'bad'],
+    ['Last file cleanup', hk.last_cleanup_day ? `${hk.last_cleanup_day} · ${hk.last_files_removed} removed` : ''],
+    ['Problem', s.housekeeping_error, 'bad'],
+  ]);
+  $('#delBox').hidden = !s.recently_deleted.length;
+  $('#deleted').innerHTML = s.recently_deleted.map(d => `<tr>
+    <td><strong>${esc(d.receipt_no || '#' + d.quote_id)}</strong></td>
+    <td>${esc(d.summary.customer_name || '')}</td>
+    <td class="num">${money(d.summary.total || 0, d.summary.currency)}</td>
+    <td class="hide-sm">${esc(d.summary.status || '')}${d.summary.payment_status === 'paid' ? ', paid' : ''}</td>
+    <td>${esc(bangkokDate(d.deleted_at))}<div class="muted">${esc(d.deleted_by || '')}</div></td></tr>`).join('');
+}
+
+async function loadUsers() {
+  const users = (await api('/api/admin/users')).data;
+  $('#users').innerHTML = users.map(u => `
+    <tr data-id="${u.id}">
+      <td><strong>${esc(u.username)}</strong>${u.active ? '' : ' <span class="pill closed">off</span>'}</td>
+      <td>${esc(u.display_name || '')}</td>
+      <td>${u.role === 'admin' ? 'Admin' : 'Member'}</td>
+      <td class="hide-sm">${esc(bangkokDate(u.last_login)) || '<span class="muted">never</span>'}</td>
+      <td><div class="acts">
+        <button class="ghost" data-act="role">${u.role === 'admin' ? 'Make member' : 'Make admin'}</button>
+        <button class="ghost" data-act="pw">New password</button>
+        <button class="ghost" data-act="active">${u.active ? 'Switch off' : 'Switch on'}</button>
+      </div></td>
+    </tr>`).join('');
+  $('#users').querySelectorAll('button').forEach(b => b.onclick = async () => {
+    const tr = b.closest('tr'), id = +tr.dataset.id, u = users.find(x => x.id === id);
+    const body = {};
+    if (b.dataset.act === 'role') body.role = u.role === 'admin' ? 'member' : 'admin';
+    if (b.dataset.act === 'active') body.active = !u.active;
+    if (b.dataset.act === 'pw') {
+      const pw = prompt(`New password for ${u.username} (they'll be signed out everywhere):`);
+      if (!pw) return;
+      body.password = pw;
+    }
+    try { await api(`/api/admin/users/${id}`, { method: 'PATCH', json: body });
+          setMsg('#msgUsers', `Updated ${u.username}.`); loadUsers(); }
+    catch (e) { setMsg('#msgUsers', e.message, false); }
+  });
+}
+
+$('#add').onclick = async () => {
+  try {
+    await api('/api/admin/users', { method: 'POST', json: {
+      username: $('#nu').value, display_name: $('#nn').value,
+      password: $('#np').value, role: $('#nr').value } });
+    setMsg('#msgUsers', `Added ${$('#nu').value}.`);
+    $('#nu').value = $('#nn').value = $('#np').value = '';
+    loadUsers();
+  } catch (e) { setMsg('#msgUsers', e.message, false); }
+};
+
+$('#sync').onclick = async () => {
+  $('#sync').disabled = true; setMsg('#msgSheet', 'Syncing…');
+  try {
+    const r = (await api('/api/admin/sheet/sync', { method: 'POST' })).data;
+    r.error ? setMsg('#msgSheet', r.error, false) : setMsg('#msgSheet', `Wrote ${r.rows} orders.`);
+  } catch (e) { setMsg('#msgSheet', e.message, false); }
+  loadStatus();
+};
+
+$('#runHk').onclick = async () => {
+  try {
+    const r = (await api('/api/admin/housekeeping', { method: 'POST' })).data;
+    setMsg('#msgHk', Object.keys(r).length ? 'Done: ' + Object.entries(r).map(([k, v]) => `${k} ${v}`).join(', ')
+      : 'Nothing was due.');
+  } catch (e) { setMsg('#msgHk', e.message, false); }
+  loadStatus();
+};
+
+(async () => {
+  const me = await renderNav('admin');
+  if (me.server_mode && me.user?.role !== 'admin') {
+    $('main').innerHTML = '<div class="warn">Only admins can open this page.</div>'; return;
+  }
+  if (me.server_mode) { $('#usersBox').hidden = false; loadUsers(); }
+  loadStatus();
+})();
+</script>
+</body>
+</html>

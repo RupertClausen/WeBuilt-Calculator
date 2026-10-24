@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order · WeBuilt Quote</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/nav.css">
+<style>
+  .head { display:flex; gap:12px 20px; align-items:baseline; flex-wrap:wrap; }
+  .head .total { margin-left:auto; font-size:26px; font-weight:700; }
+  .panel h2 { margin-top:0; }
+  .panel + .panel { margin-top:16px; }
+  .actions { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
+  .file { display:flex; gap:10px; justify-content:space-between; align-items:baseline; }
+  .danger { border-color:color-mix(in srgb, var(--bad) 45%, var(--line)); }
+  .danger h2 { color:var(--bad); }
+  button.del { background:var(--bad); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="sub"><a href="/orders">← Orders</a></div>
+  <div class="head">
+    <h1 id="title">Order</h1>
+    <span id="statuspill"></span>
+    <span id="paidpill"></span>
+    <div class="total" id="total"></div>
+  </div>
+  <div class="sub" id="meta"></div>
+  <div id="warnings"></div>
+
+  <div class="grid2" style="margin-top:20px">
+    <div>
+      <section class="panel">
+        <h2>Progress</h2>
+        <div class="row">
+          <div><label for="status">Status</label><select id="status"></select></div>
+          <div><label for="handled">Handled by</label><select id="handled"></select></div>
+        </div>
+        <div class="actions"><button id="saveStatus">Save</button></div>
+        <div id="msgStatus" class="msg"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Payment</h2>
+        <div class="row">
+          <div><label for="paid">Paid?</label>
+            <select id="paid"><option value="unpaid">Not yet</option><option value="paid">Paid</option></select></div>
+          <div><label for="method">Method</label><select id="method"></select></div>
+        </div>
+        <div class="actions"><button id="savePay">Save</button>
+          <a class="btn ghost" id="rEn" target="_blank">Receipt (EN)</a>
+          <a class="btn ghost" id="rTh" target="_blank">ใบเสร็จ (TH)</a></div>
+        <div id="msgPay" class="msg"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Customer</h2>
+        <div class="row">
+          <div><label for="cname">Name</label><input id="cname"></div>
+          <div><label for="ccontact">Contact</label><input id="ccontact" placeholder="LINE / phone"></div>
+        </div>
+        <div style="margin-top:10px"><label for="notes">Notes</label><textarea id="notes"></textarea></div>
+        <div class="actions"><button id="saveCust">Save</button></div>
+        <div id="msgCust" class="msg"></div>
+      </section>
+
+      <section class="panel danger" id="delBox" hidden>
+        <h2>Delete order</h2>
+        <div class="sub">Removes the order, its files, plate pictures and history for good.
+          To keep a record, set the status to <em>Cancelled</em> instead. The receipt number
+          is never issued again, and the deletion is noted on the Admin page.</div>
+        <div class="actions"><button id="del" class="del">Delete this order…</button></div>
+        <div id="msgDel" class="msg"></div>
+      </section>
+    </div>
+
+    <div>
+      <section class="panel">
+        <h2>Files</h2>
+        <ul class="list" id="files"></ul>
+        <div class="row" style="margin-top:12px">
+          <div><label for="attach">Add files (the customer's model, photos, a new slice)</label>
+            <input id="attach" type="file" multiple></div>
+          <div class="shrink"><button id="upload" class="ghost">Upload</button></div>
+        </div>
+        <div id="msgFiles" class="msg"></div>
+      </section>
+
+      <section class="panel" id="platesBox" hidden>
+        <h2>Plates</h2>
+        <div class="thumbs" id="thumbs"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Price</h2>
+        <table><tbody id="lines"></tbody></table>
+      </section>
+
+      <section class="panel">
+        <h2>History</h2>
+        <ul class="list" id="events"></ul>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+const ID = +location.pathname.split('/').pop();
+let order = null;
+
+function setMsg(id, text, ok = true) {
+  const el = $(id); el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'bad');
+  if (ok) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 3000);
+}
+
+function size(n) {
+  return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+}
+
+function render(o) {
+  order = o;
+  document.title = `${o.receipt_no || 'Order ' + o.id} · WeBuilt Quote`;
+  $('#title').textContent = o.receipt_no || `Order ${o.id}`;
+  $('#statuspill').innerHTML = `<span class="pill live">${esc(o.status_label)}</span>`;
+  $('#paidpill').innerHTML = o.payment_status === 'paid'
+    ? `<span class="pill paid">Paid${o.payment_method ? ' · ' + esc(o.payment_method) : ''}</span>`
+    : `<span class="pill">Unpaid</span>`;
+  $('#total').textContent = money(o.total, o.currency);
+  $('#meta').textContent = `Quoted ${bangkokDate(o.created_at)}` +
+    (o.created_by ? ` by ${o.created_by}` : '') + ` · ${o.plates} plate${o.plates === 1 ? '' : 's'}` +
+    ` · ${(+o.grams || 0).toFixed(1)} g · ${(+o.hours || 0).toFixed(2)} h` +
+    (o.app_version ? ` · priced by v${o.app_version}` : '');
+  $('#warnings').innerHTML = (o.quote.warnings || []).length
+    ? `<div class="warn">${o.quote.warnings.map(esc).join('<br>')}</div>` : '';
+
+  $('#status').value = o.status;
+  if (o.handled_by && ![...$('#handled').options].some(op => op.value === o.handled_by))
+    $('#handled').insertAdjacentHTML('beforeend', `<option value="${esc(o.handled_by)}">${esc(o.handled_by)}</option>`);
+  $('#handled').value = o.handled_by || '';
+  $('#paid').value = o.payment_status === 'paid' ? 'paid' : 'unpaid';
+  if (o.payment_method) $('#method').value = o.payment_method;
+  $('#rEn').href = `/receipt/${o.id}?lang=en`;
+  $('#rTh').href = `/receipt/${o.id}?lang=th`;
+  $('#cname').value = o.customer_name || '';
+  $('#ccontact').value = o.customer_contact || '';
+  $('#notes').value = o.notes || '';
+
+  $('#files').innerHTML = o.files.length ? o.files.map(f => `
+    <li class="file"><span>${f.deleted_at ? `<span class="muted">${esc(f.name)}</span>`
+        : `<a href="/api/orders/${o.id}/files/${f.id}">${esc(f.name)}</a>`}
+      <div class="muted">${f.kind === 'attachment' ? 'attached' : 'quoted from'} ·
+        ${esc(bangkokDate(f.uploaded_at))}${f.uploaded_by ? ' · ' + esc(f.uploaded_by) : ''}</div></span>
+      <span class="muted">${f.deleted_at ? 'removed after closing' : size(f.size)}</span></li>`).join('')
+    : `<li class="muted">No files. Quotes entered by hand have none.</li>`;
+
+  $('#platesBox').hidden = !o.thumbnails.length;
+  $('#thumbs').innerHTML = o.thumbnails.map(u => `<img src="${esc(u)}" alt="">`).join('');
+
+  $('#lines').innerHTML = o.quote.lines.filter(l => Math.abs(l.amount) > 0.004).map(l => `
+    <tr><td>${esc(l.label)}${l.note ? `<div class="muted">${esc(l.note)}</div>` : ''}</td>
+    <td class="num">${money(l.amount, o.currency)}</td></tr>`).join('') +
+    `<tr><td><strong>Total</strong></td><td class="num"><strong>${money(o.total, o.currency)}</strong></td></tr>`;
+
+  $('#events').innerHTML = o.events.slice().reverse().map(e => `
+    <li><strong>${esc(e.action)}</strong>${e.detail ? ' — ' + esc(e.detail) : ''}
+      <div class="muted">${esc(bangkokDate(e.at))} · ${esc(e.user || '')}</div></li>`).join('');
+}
+
+async function save(btn, msg, body) {
+  btn.disabled = true;
+  try {
+    render((await api(`/api/orders/${ID}`, { method: 'PATCH', json: body })).data);
+    setMsg(msg, 'Saved');
+  } catch (e) { setMsg(msg, e.message, false); }
+  finally { btn.disabled = false; }
+}
+
+$('#saveStatus').onclick = () => save($('#saveStatus'), '#msgStatus',
+  { status: $('#status').value, handled_by: $('#handled').value });
+$('#saveCust').onclick = () => save($('#saveCust'), '#msgCust',
+  { customer_name: $('#cname').value, customer_contact: $('#ccontact').value, notes: $('#notes').value });
+
+$('#savePay').onclick = async () => {
+  const fd = new FormData();
+  fd.append('status', $('#paid').value);
+  if ($('#paid').value === 'paid') fd.append('method', $('#method').value);
+  try {
+    await api(`/api/orders/${ID}/payment`, { method: 'POST', body: fd });
+    render((await api(`/api/orders/${ID}`)).data);
+    setMsg('#msgPay', 'Saved');
+  } catch (e) { setMsg('#msgPay', e.message, false); }
+};
+
+$('#del').onclick = async () => {
+  const no = order.receipt_no || String(order.id);
+  const typed = prompt(`Delete ${no} for good?\n\nType ${no} to confirm:`);
+  if (typed === null) return;
+  if (typed.trim() !== no) { setMsg('#msgDel', `That doesn't match ${no}; nothing was deleted.`, false); return; }
+  try {
+    await api(`/api/orders/${ID}?confirm=${encodeURIComponent(typed.trim())}`, { method: 'DELETE' });
+    location.replace('/orders');
+  } catch (e) { setMsg('#msgDel', e.message, false); }
+};
+
+$('#upload').onclick = async () => {
+  const files = $('#attach').files;
+  if (!files.length) return setMsg('#msgFiles', 'Choose files first.', false);
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  $('#upload').disabled = true;
+  try {
+    await api(`/api/orders/${ID}/files`, { method: 'POST', body: fd });
+    $('#attach').value = '';
+    render((await api(`/api/orders/${ID}`)).data);
+    setMsg('#msgFiles', 'Uploaded');
+  } catch (e) { setMsg('#msgFiles', e.message, false); }
+  finally { $('#upload').disabled = false; }
+};
+
+(async () => {
+  const me = await renderNav('orders');
+  $('#delBox').hidden = me.server_mode && me.user?.role !== 'admin';   // admins only on the server
+  const [statuses, users, opts] = await Promise.all([
+    api('/api/statuses'), api('/api/users'), api('/api/options')]);
+  $('#status').innerHTML = statuses.data.map(s =>
+    `<option value="${esc(s.id)}">${esc(s.label)} · ${esc(s.label_th || '')}</option>`).join('');
+  $('#handled').innerHTML = `<option value="">Nobody yet</option>` + users.data.map(u =>
+    `<option value="${esc(u.username)}">${esc(u.display_name || u.username)}</option>`).join('');
+  $('#method').innerHTML = (opts.data.payment_methods || []).map(m =>
+    `<option>${esc(m)}</option>`).join('');
+  try { render((await api(`/api/orders/${ID}`)).data); }
+  catch (e) { $('main').innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
+})();
+</script>
+</body>
+</html>

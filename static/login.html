@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in · WeBuilt Quote</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  .card { max-width:360px; margin:12vh auto 0; padding:28px 24px; }
+  .card h1 { margin-bottom:2px; }
+  .card form > div { margin-top:14px; }
+  .card button { width:100%; margin-top:18px; padding:10px; }
+</style>
+</head>
+<body>
+<main class="panel card">
+  <h1>WeBuilt Quote</h1>
+  <div class="sub">Team login</div>
+  <div id="first" class="warn" hidden>
+    No accounts yet. On the server, create the first admin:
+    <pre style="margin:6px 0 0; white-space:pre-wrap">python manage.py add-user YOURNAME --admin</pre>
+  </div>
+  <form id="f" autocomplete="on">
+    <div><label for="u">Username</label>
+      <input id="u" name="username" autocomplete="username" autocapitalize="none" required></div>
+    <div><label for="p">Password</label>
+      <input id="p" name="password" type="password" autocomplete="current-password" required></div>
+    <button id="go">Log in</button>
+    <div id="msg" class="msg bad" role="alert"></div>
+  </form>
+</main>
+<script src="/static/common.js"></script>
+<script>
+// Only ever return to a page inside this app, never to another site.
+function safeNext() {
+  const n = new URLSearchParams(location.search).get('next') || '/';
+  return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/\\') ? n : '/';
+}
+(async () => {
+  const me = await loadMe();
+  if (!me.server_mode || me.user) { location.replace(safeNext()); return; }
+  if (me.needs_first_admin) $('#first').hidden = false;
+  $('#u').focus();
+})();
+$('#f').onsubmit = async e => {
+  e.preventDefault();
+  $('#go').disabled = true; $('#msg').textContent = '';
+  try {
+    await api('/api/login', { method: 'POST', json: { username: $('#u').value, password: $('#p').value } });
+    location.replace(safeNext());
+  } catch (err) {
+    $('#msg').textContent = err.message;
+    $('#p').value = ''; $('#p').focus();
+  } finally { $('#go').disabled = false; }
+};
+</script>
+</body>
+</html>

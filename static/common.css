@@ -1,0 +1,71 @@
+/* Shared look for the orders, order, admin, account and login pages. */
+:root {
+  --bg:#ffffff; --fg:#15171a; --muted:#6b7280; --line:#e5e7eb; --panel:#f8f9fb;
+  --accent:#2563eb; --accent-fg:#ffffff; --ok:#15803d; --bad:#dc2626;
+  --warn-bg:#fff7ed; --warn-fg:#9a3412; --warn-line:#fed7aa;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#0f1115; --fg:#e6e8eb; --muted:#9aa1ab; --line:#272b33; --panel:#171a20;
+    --accent:#3b82f6; --accent-fg:#ffffff; --ok:#4ade80; --bad:#f87171;
+    --warn-bg:#2a1d10; --warn-fg:#fdba74; --warn-line:#7c2d12;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0f1115; --fg:#e6e8eb; --muted:#9aa1ab; --line:#272b33; --panel:#171a20;
+  --accent:#3b82f6; --accent-fg:#ffffff; --ok:#4ade80; --bad:#f87171;
+  --warn-bg:#2a1d10; --warn-fg:#fdba74; --warn-line:#7c2d12;
+}
+* { box-sizing:border-box; }
+/* Elements styled with a display value still have to obey `hidden`. */
+[hidden] { display:none !important; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font:15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans Thai", sans-serif; }
+.wrap { max-width:1040px; margin:0 auto; padding:24px 16px 64px; }
+h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.01em; }
+h2 { font-size:15px; margin:28px 0 10px; }
+.sub, .muted { color:var(--muted); font-size:13px; }
+a { color:var(--accent); }
+label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+input, select, textarea {
+  width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+  background:var(--bg); color:var(--fg); font:inherit; }
+textarea { min-height:70px; resize:vertical; }
+button, .btn {
+  background:var(--accent); color:var(--accent-fg); border:0; padding:8px 14px;
+  border-radius:8px; font:inherit; font-weight:600; cursor:pointer; text-decoration:none;
+  display:inline-block; white-space:nowrap; }
+button.ghost, .btn.ghost { background:none; color:var(--fg); border:1px solid var(--line); font-weight:500; }
+button:disabled { opacity:.5; cursor:default; }
+.row { display:flex; gap:10px; align-items:end; flex-wrap:wrap; }
+.row > * { flex:1 1 160px; }
+.row > .shrink { flex:0 0 auto; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:16px; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:top;
+         overflow-wrap:anywhere; }   /* long file names must not widen the page */
+.nowrap { white-space:nowrap; overflow-wrap:normal; }
+th { font-size:12px; color:var(--muted); font-weight:600; overflow-wrap:normal; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+tr.click { cursor:pointer; }
+tr.click:hover td { background:var(--panel); }
+.pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px;
+        border:1px solid var(--line); white-space:nowrap; }
+.pill.paid { color:var(--ok); border-color:var(--ok); }
+.pill.closed { color:var(--muted); }
+.pill.live { color:var(--accent); border-color:var(--accent); }
+.warn { background:var(--warn-bg); color:var(--warn-fg); border:1px solid var(--warn-line);
+        border-radius:8px; padding:10px 12px; margin:12px 0; font-size:13px; }
+.ok { color:var(--ok); }
+.bad { color:var(--bad); }
+.msg { min-height:20px; font-size:13px; margin-top:8px; }
+.list { margin:0; padding:0; list-style:none; }
+.list li { padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+.thumbs { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px; }
+.thumbs img { width:100%; aspect-ratio:1; object-fit:contain; background:var(--panel);
+              border:1px solid var(--line); border-radius:8px; }
+.kv { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; font-size:14px; }
+.kv dt { color:var(--muted); }
+.kv dd { margin:0; }
+@media (max-width:600px) { .hide-sm { display:none; } }

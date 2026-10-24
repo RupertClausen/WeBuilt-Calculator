@@ -1,0 +1,74 @@
+# WeBuilt — team server and order settings
+#
+# Ships switched OFF: a copy run on someone's own computer behaves exactly as
+# before (no logins, no sheet mirror). On the team server, local/server.yaml
+# switches it on, for example:
+#
+#   enabled: true
+#   public_url: "https://webuilt-quote.your-tailnet.ts.net"
+#   sheets:
+#     enabled: true
+#     spreadsheet_id: "1Pt40vLAdeeS_V-..."
+#
+# Statuses, file retention and backups apply in both modes.
+
+enabled: false
+
+# The address teammates open. Used for links in the Google Sheet.
+public_url: ""
+
+# ---------------------------------------------------------------------------
+# Logins (server mode)
+# ---------------------------------------------------------------------------
+session_days: 14              # stay logged in this long without activity
+min_password_length: 8
+max_failed_logins: 5          # then the account is locked for lockout_minutes
+lockout_minutes: 10
+
+# ---------------------------------------------------------------------------
+# Order statuses
+# ---------------------------------------------------------------------------
+# In order, as they appear in the app and the sheet. `closes: true` means the
+# job is finished: the file-retention clock starts when an order first
+# reaches one of these. The Orders list has a one-click "next step" button
+# that moves an order to the following status; `pick_only: true` statuses
+# are skipped by it and can only be chosen from the dropdown.
+statuses:
+  quoted:    {label: "Quoted",    label_th: "เสนอราคา"}
+  queued:    {label: "In queue",  label_th: "รอพิมพ์"}
+  printing:  {label: "Printing",  label_th: "กำลังปริ้น"}
+  done:      {label: "Done",      label_th: "เสร็จสิ้น", closes: true}
+  delivered: {label: "Delivered", label_th: "ส่งแล้ว",  closes: true}
+  cancelled: {label: "Cancelled", label_th: "ยกเลิก",   closes: true, pick_only: true}
+
+# ---------------------------------------------------------------------------
+# Uploaded files
+# ---------------------------------------------------------------------------
+files:
+  # Sliced files and attachments are deleted this many days after the order
+  # is closed. The order itself, its prices and plate pictures are kept.
+  # 0 keeps files forever.
+  keep_days_after_closed: 90
+  max_attachment_mb: 200
+
+# ---------------------------------------------------------------------------
+# Database backups
+# ---------------------------------------------------------------------------
+backups:
+  enabled: true
+  hour: 3                     # local time, once a day
+  keep: 14                    # newest copies kept
+
+# ---------------------------------------------------------------------------
+# Google Sheet mirror (server mode)
+# ---------------------------------------------------------------------------
+# The app writes every order to its own tab of the spreadsheet. The app leads:
+# the tab is rewritten from the app, so edits made in it are overwritten.
+# Other tabs are never touched.
+sheets:
+  enabled: false
+  spreadsheet_id: ""          # the long id in the sheet's URL
+  tab: "Orders (app)"
+  # Service-account key, kept in local/ so it never ships or gets committed.
+  credentials_file: "local/google-service-account.json"
+  resync_minutes: 30          # also rewrite this often, to undo edits made in the sheet

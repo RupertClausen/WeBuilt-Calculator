@@ -11,3 +11,30 @@ Jinja2==3.1.6
 # Windows has no built-in time zone database; Python's zoneinfo needs this
 # to know what Asia/Bangkok is. Harmless on Linux.
 tzdata==2026.5
+
+# Google Sheets mirror (team server). google-auth signs the service-account
+# token; requests carries the API calls. Everything below is pinned to a
+# release at least two weeks old when added, including what they pull in.
+google-auth==2.61.0
+requests==2.34.2
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.1
+pyasn1==0.6.4
+pyasn1-modules==0.4.2
+certifi==2026.7.22
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
+
+# Pulled in by the packages above. Pinned too, so every install gets the
+# exact same set, not whatever is newest on the day.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+click==8.5.0
+h11==0.16.0
+MarkupSafe==3.0.4
+pydantic-core==2.46.4
+typing-extensions==4.16.0
+typing-inspection==0.4.4

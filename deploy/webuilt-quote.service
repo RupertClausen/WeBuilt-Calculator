@@ -1,0 +1,35 @@
+# WeBuilt Quote team server, as a systemd service.
+#
+# Installed by deploy/install-server.sh to /etc/systemd/system/. Runs as its
+# own unprivileged user, listens on 127.0.0.1 only (Tailscale serve publishes
+# it over HTTPS), and restarts itself if it stops.
+
+[Unit]
+Description=WeBuilt Quote team server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=webuilt
+Group=webuilt
+WorkingDirectory=/opt/webuilt-quote
+Environment=PYTHONUTF8=1
+Environment=LANG=C.UTF-8
+Environment=PIP_NO_CACHE_DIR=1
+# launch.py (not serve.py directly) so the Admin page's "Update and restart"
+# works here too: it installs the update and starts the new version.
+ExecStart=/usr/bin/python3 launch.py --port 8000 --no-browser
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the app only needs to write its own data, local settings,
+# backups and (for updates) its own folder.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/webuilt-quote
+
+[Install]
+WantedBy=multi-user.target

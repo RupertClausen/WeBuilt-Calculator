@@ -615,7 +615,8 @@ async function setPaid(status) {
   fd.append('status', status);
   const m = document.getElementById('method');
   if (m) fd.append('method', m.value);
-  const r = await fetch('/api/orders/{{ id }}/payment', { method: 'POST', body: fd });
+  const r = await fetch('/api/orders/{{ id }}/payment', { method: 'POST', body: fd,
+                         headers: { 'X-WeBuilt': '1' } });
   if (r.ok) location.reload(); else alert((await r.json()).detail);
 }
 async function copyText() {

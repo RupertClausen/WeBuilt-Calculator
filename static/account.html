@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account · WeBuilt Quote</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/nav.css">
+</head>
+<body>
+<main class="wrap" style="max-width:460px">
+  <h1>Account</h1>
+  <div class="sub" id="who">&nbsp;</div>
+  <section class="panel" style="margin-top:20px">
+    <h2 style="margin-top:0">Change password</h2>
+    <form id="f">
+      <div><label for="cur">Current password</label>
+        <input id="cur" type="password" autocomplete="current-password" required></div>
+      <div style="margin-top:10px"><label for="n1">New password</label>
+        <input id="n1" type="password" autocomplete="new-password" required></div>
+      <div style="margin-top:10px"><label for="n2">New password again</label>
+        <input id="n2" type="password" autocomplete="new-password" required></div>
+      <div style="margin-top:14px"><button id="go">Change password</button></div>
+      <div id="msg" class="msg"></div>
+    </form>
+  </section>
+</main>
+<script src="/static/common.js"></script>
+<script>
+(async () => {
+  const me = await renderNav('');
+  if (!me.user) { $('main').innerHTML = '<div class="warn">Accounts are only used on the team server.</div>'; return; }
+  $('#who').textContent = `${me.user.display_name || me.user.username} · ${me.user.username} · ${me.user.role}`;
+})();
+$('#f').onsubmit = async e => {
+  e.preventDefault();
+  const msg = $('#msg');
+  if ($('#n1').value !== $('#n2').value) { msg.textContent = "The new passwords don't match."; msg.className = 'msg bad'; return; }
+  try {
+    const r = (await api('/api/me/password', { method: 'POST',
+      json: { current: $('#cur').value, new: $('#n1').value } })).data;
+    msg.textContent = r.message; msg.className = 'msg ok';
+    $('#f').reset();
+  } catch (err) { msg.textContent = err.message; msg.className = 'msg bad'; }
+};
+</script>
+</body>
+</html>

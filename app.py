@@ -37,250 +37,254 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from urllib.parse import quote as urlquote
+
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
+                               RedirectResponse, Response)
+from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+import auth
+import housekeeping
+import orders
 import pricing
+import sheets
 import updater
 import receipt as receipt_doc
 from pricing import QuoteItem
 from slicefile import FilamentUse, ParseError, SlicedJob, parse
-
-BASE = Path(__file__).parent
-CONFIG_DIR = BASE / "config"
-LOCAL_DIR = BASE / "local"
-DATA_DIR = BASE / "data"
-
-RELEASE = json.loads((BASE / "release.json").read_text(encoding="utf-8"))
-APP_VERSION = RELEASE["version"]
-
-
-def _default_db() -> Path:
-    """data/orders.db, moving a pre-1.0 orders.db from the app folder there
-    once. Only moved when SQLite has no side files open next to it, so a
-    database in use is never split from its journal."""
-    new, old = DATA_DIR / "orders.db", BASE / "orders.db"
-    if not new.exists() and old.exists():
-        side = [p for p in BASE.glob("orders.db-*")]
-        if side:
-            print(f"[webuilt] keeping {old.name} in place: SQLite side files present")
-            return old
-        DATA_DIR.mkdir(exist_ok=True)
-        old.rename(new)
-        print(f"[webuilt] moved {old.name} to data/{new.name}")
-    DATA_DIR.mkdir(exist_ok=True)
-    return new
-
-
-# WEBUILT_DB points the server at another database, e.g. a throwaway one for
-# testing, so trial quotes never land in the real order log.
-DB_PATH = Path(os.environ["WEBUILT_DB"]) if os.environ.get("WEBUILT_DB") else _default_db()
-MAX_UPLOAD_BYTES = 200 * 1024 * 1024        # sliced files get big
+from core import (BASE, CONFIG_DIR, LOCAL_DIR, DATA_DIR, FILES_DIR, BACKUP_DIR,
+                  RELEASE, APP_VERSION, DB_PATH, MAX_UPLOAD_BYTES, ConfigStore,
+                  config, db, deep_merge, get_state, init_db, local_now,
+                  server_mode, set_state, utcnow)
 
 @asynccontextmanager
 async def _lifespan(_app):
     update_check.get()          # start the first background check
+    housekeeping.start()        # backups, file retention, expired sessions
+    if server_mode():
+        sheets.mirror.start()   # does nothing until sheets.enabled is true
     yield
+    housekeeping.stop()
+    sheets.mirror.stop()
 
 
 app = FastAPI(title=RELEASE.get("name", "WeBuilt quote service"), version=APP_VERSION,
               lifespan=_lifespan)
+app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 
 
 # ---------------------------------------------------------------------------
-# config, with hot reload
+# logins (server mode only)
 # ---------------------------------------------------------------------------
 
-def deep_merge(base, override):
-    """Overlay `override` on `base`. Mappings merge key by key; anything else
-    (numbers, text, lists) is replaced whole. A key set to null in the
-    override removes it, e.g. `large: null` drops a shared printer."""
-    if isinstance(base, dict) and isinstance(override, dict):
-        out = dict(base)
-        for k, v in override.items():
-            if v is None:
-                out.pop(k, None)
-            else:
-                out[k] = deep_merge(base.get(k), v)
-        return out
-    return override
+# Reachable without logging in: the login page itself, and the health check.
+PUBLIC_PATHS = {"/login", "/api/login", "/api/me", "/healthz"}
 
 
-class ConfigStore:
-    """Shared config from config/, with this computer's overrides from local/
-    laid on top. Both are re-read when either file changes.
+@app.middleware("http")
+async def team_gate(request: Request, call_next):
+    """On the team server, everything needs a login, and every change needs
+    the X-WeBuilt header. A page on another website can make your browser
+    send a form, but not a custom header, so this stops cross-site requests
+    riding on your login. On someone's own computer, nothing changes."""
+    request.state.user = None
+    if not server_mode():
+        return await call_next(request)
+    if request.method not in ("GET", "HEAD", "OPTIONS") and \
+            request.headers.get("x-webuilt") != "1":
+        return JSONResponse({"detail": "Missing X-WeBuilt header."}, status_code=403)
+    request.state.user = await run_in_threadpool(
+        auth.user_for_token, request.cookies.get(auth.COOKIE))
+    path = request.url.path
+    if request.state.user or path in PUBLIC_PATHS or path.startswith("/static/"):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Not logged in."}, status_code=401)
+    target = path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse(f"/login?next={urlquote(target)}", status_code=303)
 
-    A broken edit never takes the app down mid-shift: if a file stops
-    parsing, the last good version stays in use and the problem is reported
-    on every quote until it is fixed.
-    """
 
-    FILES = {
-        "pricing": "pricing.yaml",
-        "printers": "printers.yaml",
-        "filaments": "filaments.yaml",
-        "receipt": "receipt.yaml",
+@app.middleware("http")
+async def fresh_pages(request: Request, call_next):
+    """Pages, scripts and styles: browsers must check for a newer copy every
+    time (a tiny 304 when nothing changed). Otherwise, after an update, a
+    browser can keep running yesterday's scripts against the new server."""
+    response = await call_next(request)
+    if request.method == "GET" and "cache-control" not in response.headers and \
+            not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+def current_user(request: Request) -> dict | None:
+    return getattr(request.state, "user", None)
+
+
+def actor(request: Request) -> str:
+    """Who did it, for the order history. 'local' on someone's own computer."""
+    u = current_user(request)
+    return u["username"] if u else "local"
+
+
+def require_admin(request: Request) -> None:
+    if server_mode():
+        u = current_user(request)
+        if not u or u["role"] != "admin":
+            raise HTTPException(403, "Only an admin can do that.")
+
+
+def _secure_cookie(request: Request) -> bool:
+    return (request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto") == "https")
+
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/login")
+def login_page():
+    return FileResponse(BASE / "static" / "login.html")
+
+
+@app.post("/api/login")
+def api_login(body: LoginBody, request: Request):
+    if not server_mode():
+        raise HTTPException(409, "Logins are only used on the team server.")
+    try:
+        token, user = auth.login(body.username, body.password)
+    except auth.AuthError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    resp = JSONResponse({"user": user})
+    resp.set_cookie(auth.COOKIE, token, httponly=True, samesite="lax",
+                    secure=_secure_cookie(request),
+                    max_age=int(config["server"].get("session_days", 14)) * 86400)
+    return resp
+
+
+@app.post("/api/logout")
+def api_logout(request: Request):
+    auth.logout(request.cookies.get(auth.COOKIE))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE)
+    return resp
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    return {"server_mode": server_mode(), "user": current_user(request),
+            "needs_first_admin": server_mode() and auth.user_count() == 0}
+
+
+@app.get("/api/users")
+def team_members(request: Request):
+    """Active teammates, for 'handled by'. Names only, for anyone logged in."""
+    return [{"username": u["username"], "display_name": u["display_name"]}
+            for u in auth.list_users() if u["active"]] if server_mode() else []
+
+
+class PasswordBody(BaseModel):
+    current: str
+    new: str
+
+
+@app.post("/api/me/password")
+def api_change_password(body: PasswordBody, request: Request):
+    u = current_user(request)
+    if not u:
+        raise HTTPException(409, "Logins are only used on the team server.")
+    try:
+        auth.change_own_password(u["id"], body.current, body.new,
+                                 keep_session=request.cookies.get(auth.COOKIE))
+    except auth.AuthError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True, "message": "Password changed. Log in again on your other devices."}
+
+
+class NewUser(BaseModel):
+    username: str
+    password: str
+    role: str = "member"
+    display_name: str | None = None
+
+
+class UserChange(BaseModel):
+    role: str | None = None
+    active: bool | None = None
+    display_name: str | None = None
+    password: str | None = None
+
+
+@app.get("/api/admin/users")
+def admin_users(request: Request):
+    require_admin(request)
+    return auth.list_users()
+
+
+@app.post("/api/admin/users")
+def admin_add_user(body: NewUser, request: Request):
+    require_admin(request)
+    try:
+        return auth.create_user(body.username, body.password, body.role, body.display_name)
+    except auth.AuthError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/admin/status")
+def admin_status(request: Request):
+    """What the background jobs are doing, for the admin page."""
+    require_admin(request)
+    with db() as conn:
+        counts = {r["status"]: r["n"] for r in conn.execute(
+            "SELECT status, COUNT(*) AS n FROM quotes GROUP BY status")}
+        files = conn.execute("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes"
+                             " FROM order_files WHERE deleted_at IS NULL").fetchone()
+    return {
+        "version": APP_VERSION,
+        "server_mode": server_mode(),
+        "orders_by_status": counts,
+        "stored_files": {"count": files["n"], "bytes": files["bytes"]},
+        "sheet": sheets.mirror.status(),
+        "housekeeping": get_state("housekeeping", {}),
+        "housekeeping_error": get_state("housekeeping_error"),
+        "backups": sorted(p.name for p in BACKUP_DIR.glob("orders-*.db"))[-5:],
+        "recently_deleted": orders.deleted_orders(10),
+        "config_errors": list(config.errors.values()),
     }
 
-    def __init__(self, directory: Path, local_dir: Path | None = None):
-        self.dir = directory
-        self.local_dir = local_dir
-        self._data: dict[str, dict] = {}
-        self._stamp: dict[str, tuple] = {}
-        self.errors: dict[str, str] = {}
-        self.load(force=True, strict=True)
 
-    def _paths(self, name: str) -> tuple[Path, Path | None]:
-        local = self.local_dir / name if self.local_dir else None
-        return self.dir / name, (local if local and local.exists() else None)
-
-    @staticmethod
-    def _read(path: Path) -> dict:
-        with path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        if not isinstance(data, dict):
-            raise ValueError("top level must be a mapping of settings")
-        return data
-
-    def load(self, force: bool = False, strict: bool = False) -> list[str]:
-        reloaded = []
-        for key, name in self.FILES.items():
-            shared, local = self._paths(name)
-            if not shared.exists():
-                raise RuntimeError(f"Missing config file: {shared}")
-            stamp = (shared.stat().st_mtime, local.stat().st_mtime if local else None)
-            if not force and self._stamp.get(key) == stamp:
-                continue
-            current = shared
-            try:
-                merged = self._read(shared)
-                if local:
-                    current = local
-                    merged = deep_merge(merged, self._read(local))
-            except (yaml.YAMLError, ValueError, OSError) as exc:
-                where = f"{current.parent.name}/{current.name}"
-                if strict or key not in self._data:
-                    raise RuntimeError(f"Cannot load {where}: {exc}") from exc
-                self.errors[key] = (f"{where} has an error, so its last working "
-                                    f"version is still in use: {str(exc).splitlines()[0]}")
-                self._stamp[key] = stamp            # don't re-parse until it changes
-                continue
-            self._data[key] = merged
-            self._stamp[key] = stamp
-            self.errors.pop(key, None)
-            reloaded.append(name)
-        return reloaded
-
-    def local_files(self) -> list[str]:
-        return [n for n in self.FILES.values() if self._paths(n)[1]]
-
-    def __getitem__(self, key: str) -> dict:
-        self.load()          # cheap stat() per request
-        return self._data[key]
+@app.post("/api/admin/sheet/sync")
+def admin_sheet_sync(request: Request):
+    require_admin(request)
+    if not sheets.mirror.enabled():
+        raise HTTPException(409, "The sheet mirror is off: set sheets.enabled in "
+                                 "local/server.yaml.")
+    return sheets.mirror.sync_now()
 
 
-config = ConfigStore(CONFIG_DIR, LOCAL_DIR)
+@app.post("/api/admin/housekeeping")
+def admin_housekeeping(request: Request):
+    require_admin(request)
+    return housekeeping.run_once()
+
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_change_user(user_id: int, body: UserChange, request: Request):
+    require_admin(request)
+    try:
+        return auth.update_user(user_id, role=body.role, active=body.active,
+                                display_name=body.display_name, password=body.password)
+    except auth.AuthError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
 # order log
 # ---------------------------------------------------------------------------
-
-@contextmanager
-def db():
-    """A connection that commits on success, rolls back on error, and is
-    always closed: the server runs all day, so nothing may be left open."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    # Needed for ON DELETE CASCADE: deleting a quote removes its pictures.
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        with conn:
-            yield conn
-    finally:
-        conn.close()
-
-
-def init_db() -> None:
-    with db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quotes (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at    TEXT NOT NULL,
-                filename      TEXT,
-                printer       TEXT,
-                materials     TEXT,
-                grams         REAL,
-                hours         REAL,
-                plates        INTEGER,
-                rush          TEXT,
-                delivery      TEXT,
-                total         REAL,
-                currency      TEXT,
-                est_cost      REAL,
-                est_margin    REAL,
-                p_success     REAL,
-                risk_factor   REAL,
-                outcome       TEXT DEFAULT 'quoted',
-                detail_json   TEXT
-            )
-            """
-        )
-        # `outcome` is here so you can mark a job completed/failed later and
-        # back-fit each printer's real failure rate from your own history.
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at)"
-        )
-
-        # Columns added for receipts. ALTER only what is missing, so an
-        # existing orders.db upgrades in place.
-        have = {r["name"] for r in conn.execute("PRAGMA table_info(quotes)")}
-        for col, ddl in (
-            ("receipt_no", "TEXT"),
-            ("customer_name", "TEXT"),
-            ("customer_contact", "TEXT"),
-            ("notes", "TEXT"),
-            ("payment_status", "TEXT DEFAULT 'unpaid'"),
-            ("payment_method", "TEXT"),
-            ("paid_at", "TEXT"),
-            # Where the money goes, so a month of orders can be summed.
-            ("labour", "REAL"),
-            ("contingency", "REAL"),
-            ("profit", "REAL"),
-            # Which release (and so which price list) produced the quote.
-            ("app_version", "TEXT"),
-            # The discount given and why; `profit` is what was kept after it.
-            ("discount", "REAL"),
-            ("discount_label", "TEXT"),
-            # 1 when the app chose the receipt number, NULL when typed by
-            # hand. Only app-chosen numbers move the automatic counter.
-            ("receipt_auto", "INTEGER"),
-        ):
-            if col not in have:
-                conn.execute(f"ALTER TABLE quotes ADD COLUMN {col} {ddl}")
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_receipt"
-            " ON quotes(receipt_no) WHERE receipt_no IS NOT NULL"
-        )
-        # Plate pictures live apart from detail_json so the quote record
-        # stays small. `plate` matches breakdown.plates[].plate.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS plate_thumbnails (
-                quote_id  INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
-                plate     INTEGER NOT NULL,
-                mime      TEXT NOT NULL,
-                data      BLOB NOT NULL,
-                PRIMARY KEY (quote_id, plate)
-            )
-            """
-        )
-
-
-init_db()
-
 
 def plate_thumbnails(items: list) -> dict[int, tuple[bytes, str]]:
     """Plate number -> (image, mime), numbered the same way as the quote's
@@ -311,11 +315,6 @@ def attach_thumbnails(payload: dict, thumbs: dict, quote_id: int | None) -> None
     payload["breakdown"] = {**payload["breakdown"], "plates": plates}
 
 
-def local_now() -> datetime:
-    tz = config["receipt"].get("timezone", "Asia/Bangkok")
-    return datetime.now(receipt_doc.zone(tz))
-
-
 def next_receipt_no(conn: sqlite3.Connection, when: datetime) -> str:
     """WB-YYMM-NNN, restarting each month.
 
@@ -330,9 +329,12 @@ def next_receipt_no(conn: sqlite3.Connection, when: datetime) -> str:
     stem = f"{prefix}-{yymm}-"
     taken: set[int] = set()
     last_auto = 0
+    # Deleted orders count too: their numbers may be in customers' hands.
     for no, auto in conn.execute(
-        "SELECT receipt_no, receipt_auto FROM quotes WHERE receipt_no LIKE ?",
-        (stem + "%",),
+        "SELECT receipt_no, receipt_auto FROM quotes WHERE receipt_no LIKE ?"
+        " UNION ALL SELECT receipt_no, receipt_auto FROM deleted_orders"
+        " WHERE receipt_no LIKE ?",
+        (stem + "%", stem + "%"),
     ):
         tail = (no or "")[len(stem):]
         if tail.isdigit():
@@ -354,6 +356,8 @@ def log_quote(
     delivery: str,
     customer: dict | None = None,
     thumbnails: dict[int, tuple[bytes, str]] | None = None,
+    created_by: str = "local",
+    files: list[tuple[str, bytes]] | None = None,
 ) -> tuple[int, str, str | None]:
     """Append a quote to the order log.
 
@@ -370,6 +374,7 @@ def log_quote(
     econ = bd.get("economics", {})
 
     customer = customer or {}
+    quote_id = None
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
     conn.execute("PRAGMA foreign_keys = ON")
     try:
@@ -381,8 +386,10 @@ def log_quote(
         note = None
         typed = (customer.get("receipt_no") or "").strip()
         receipt_no, auto = typed, False
-        if typed and conn.execute("SELECT 1 FROM quotes WHERE receipt_no = ?",
-                                  (typed,)).fetchone():
+        if typed and conn.execute(
+                "SELECT 1 FROM quotes WHERE receipt_no = ?"
+                " UNION ALL SELECT 1 FROM deleted_orders WHERE receipt_no = ?",
+                (typed, typed)).fetchone():
             receipt_no = ""
         if not receipt_no:
             receipt_no, auto = next_receipt_no(conn, local_now()), True
@@ -436,13 +443,21 @@ def log_quote(
             conn.execute(
                 "INSERT INTO plate_thumbnails (quote_id, plate, mime, data)"
                 " VALUES (?,?,?,?)", (quote_id, plate, mime, data))
+        conn.execute("UPDATE quotes SET created_by = ?, status = 'quoted', updated_at = ?"
+                     " WHERE id = ?", (created_by, utcnow(), quote_id))
+        orders.add_event(conn, quote_id, created_by, "created",
+                         f"{receipt_no}, {quote.currency} {quote.total:,.2f}")
+        orders.save_files(conn, quote_id, files or [], created_by)
         conn.execute("COMMIT")
-        return quote_id, receipt_no, note
     except Exception:
         conn.execute("ROLLBACK")
+        if quote_id is not None:
+            orders.remove_order_dir(quote_id)       # files written before the failure
         raise
     finally:
         conn.close()
+    orders.notify()
+    return quote_id, receipt_no, note
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +541,7 @@ def version(refresh: bool = False):
 
 
 @app.post("/api/update")
-def request_update(x_webuilt_action: str | None = Header(None)):
+def request_update(request: Request, x_webuilt_action: str | None = Header(None)):
     """Stop the app so the launcher can install the update and restart it.
 
     The custom header can't be sent by another website without a CORS
@@ -535,6 +550,7 @@ def request_update(x_webuilt_action: str | None = Header(None)):
     """
     if x_webuilt_action != "update":
         raise HTTPException(400, "Missing X-WeBuilt-Action: update")
+    require_admin(request)
     if _install_kind() != "release" or not getattr(app.state, "self_update", False):
         raise HTTPException(409, "This copy can't update itself; see README.")
     stop = getattr(app.state, "request_update", None)
@@ -604,12 +620,15 @@ def options():
         },
         "materials": sorted((config["filaments"].get("materials") or {}).keys()),
         "labour_rate_per_hour": pc.get("labour_rate_per_hour"),
+        "payment_methods": config["receipt"].get("payment_methods") or [],
         "currency": pc.get("currency", "THB"),
     }
 
 
 @app.get("/api/config")
-def get_config():
+def get_config(request: Request):
+    """Includes supplier costs, so admin-only on the team server."""
+    require_admin(request)
     return {
         "pricing": config["pricing"],
         "printers": config["printers"],
@@ -618,13 +637,15 @@ def get_config():
 
 
 @app.post("/api/config/reload")
-def reload_config():
+def reload_config(request: Request):
+    require_admin(request)
     changed = config.load(force=True)
     return {"reloaded": changed}
 
 
 @app.post("/api/quote")
 async def quote_endpoint(
+    request: Request,
     files: list[UploadFile] = File(..., description="one or more sliced files"),
     printer: str | None = Form(None),
     copies: list[int] | None = Form(None),
@@ -659,6 +680,7 @@ async def quote_endpoint(
     t0 = time.perf_counter()
     items: list[QuoteItem] = []
     file_meta = []
+    uploads: list[tuple[str, bytes]] = []
     total_bytes = 0
 
     for i, up in enumerate(files):
@@ -671,6 +693,7 @@ async def quote_endpoint(
             raise HTTPException(400, f"{up.filename or 'file'} is empty.")
 
         name = up.filename or f"upload-{i+1}"
+        uploads.append((name, data))
         try:
             jobs = parse(name, data)
         except ParseError as exc:
@@ -741,6 +764,8 @@ async def quote_endpoint(
                       "customer_contact": customer_contact,
                       "notes": notes, "receipt_no": receipt_no or None},
             thumbnails=thumbs,
+            created_by=actor(request),
+            files=uploads,
         )
         payload["receipt_url"] = f"/receipt/{payload['quote_id']}"
         if number_note:
@@ -800,7 +825,7 @@ class ManualQuote(BaseModel):
 
 
 @app.post("/api/quote/manual")
-def quote_manual(body: ManualQuote):
+def quote_manual(body: ManualQuote, request: Request):
     if body.seconds <= 0:
         raise HTTPException(422, "Enter a print time greater than zero.")
 
@@ -860,6 +885,7 @@ def quote_manual(body: ManualQuote):
             customer={"customer_name": body.customer_name,
                       "customer_contact": body.customer_contact,
                       "notes": body.notes, "receipt_no": body.receipt_no or None},
+            created_by=actor(request),
         )
         payload["receipt_url"] = f"/receipt/{payload['quote_id']}"
         if number_note:
@@ -870,21 +896,100 @@ def quote_manual(body: ManualQuote):
 
 
 @app.get("/api/orders")
-def list_orders(limit: int = 50):
+def list_orders(status: str | None = None, q: str | None = None,
+                limit: int = 50, offset: int = 0):
+    """Newest first. `status` is a status key or 'open' (not closed); `q`
+    searches receipt number, customer, file name and notes. The total count
+    is in the X-Total-Count header, so the body stays a plain list."""
+    items, total = orders.list_orders(status, q, limit, offset)
+    for it in items:
+        it["status_label"] = orders.status_label(it["status"])
+    return JSONResponse(items, headers={"X-Total-Count": str(total)})
+
+
+@app.get("/api/statuses")
+def list_statuses():
+    return [{"id": k, "label": v.get("label", k), "label_th": v.get("label_th"),
+             "closes": bool(v.get("closes")), "pick_only": bool(v.get("pick_only"))}
+            for k, v in orders.statuses().items()]
+
+
+@app.get("/api/orders/{quote_id}")
+def get_order(quote_id: int):
+    try:
+        order = orders.get_order(quote_id)
+    except orders.OrderError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    order["status_label"] = orders.status_label(order["status"])
+    order["thumbnails"] = [thumbnail_url(quote_id, p) for p in order["thumbnails"]]
+    order["receipt_url"] = f"/receipt/{quote_id}"
+    return order
+
+
+class OrderChange(BaseModel):
+    status: str | None = None
+    handled_by: str | None = None
+    notes: str | None = None
+    customer_name: str | None = None
+    customer_contact: str | None = None
+
+
+@app.patch("/api/orders/{quote_id}")
+def change_order(quote_id: int, body: OrderChange, request: Request):
+    try:
+        orders.update_order(quote_id, body.model_dump(exclude_none=True), actor(request))
+    except orders.OrderError as exc:
+        code = 404 if str(exc).startswith("No order") else 422
+        raise HTTPException(code, str(exc)) from exc
+    return get_order(quote_id)
+
+
+@app.delete("/api/orders/{quote_id}")
+def delete_order(quote_id: int, request: Request, confirm: str = ""):
+    """Delete for good. Admins only on the team server (members cancel
+    instead), and `confirm` must be the order's receipt number."""
+    require_admin(request)
+    try:
+        return orders.delete_order(quote_id, actor(request), confirm)
+    except orders.OrderError as exc:
+        code = 404 if str(exc).startswith("No order") else 422
+        raise HTTPException(code, str(exc)) from exc
+
+
+@app.post("/api/orders/{quote_id}/files")
+async def attach_to_order(quote_id: int, request: Request,
+                          files: list[UploadFile] = File(...)):
+    """Add files to an order after quoting: the customer's original model, a
+    photo, a revised slice."""
+    data = [(f.filename or "file", await f.read()) for f in files]
+    if not any(d for _, d in data):
+        raise HTTPException(400, "The files are empty.")
+    try:
+        return orders.attach_files(quote_id, data, actor(request))
+    except orders.OrderError as exc:
+        code = 404 if str(exc).startswith("No order") else 413
+        raise HTTPException(code, str(exc)) from exc
+
+
+@app.get("/api/orders/{quote_id}/files/{file_id}")
+def download_file(quote_id: int, file_id: int):
     with db() as conn:
-        rows = conn.execute(
-            "SELECT id, receipt_no, created_at, customer_name, filename, printer,"
-            " materials, grams, hours, total, currency, est_margin, p_success,"
-            " outcome, payment_status, payment_method, paid_at,"
-            " labour, contingency, profit, app_version, discount, discount_label"
-            " FROM quotes ORDER BY id DESC LIMIT ?",
-            (min(limit, 500),),
-        ).fetchall()
-    return [dict(r) for r in rows]
+        row = conn.execute("SELECT * FROM order_files WHERE id = ? AND quote_id = ?",
+                           (file_id, quote_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, "No such file.")
+    if row["deleted_at"]:
+        raise HTTPException(410, "This file was removed after the order closed.")
+    path = orders.file_path(quote_id, row["stored_as"])
+    if not path.exists():
+        raise HTTPException(404, "The file is missing from the server.")
+    # Always a download, never shown in the browser: these are customers' files.
+    return FileResponse(path, filename=row["name"], media_type="application/octet-stream",
+                        headers={"X-Content-Type-Options": "nosniff"})
 
 
 @app.post("/api/orders/{quote_id}/outcome")
-def set_outcome(quote_id: int, outcome: str = Form(...)):
+def set_outcome(quote_id: int, request: Request, outcome: str = Form(...)):
     """Mark what actually happened, so failure rates can be back-fitted.
 
     Use 'completed' or 'failed'. Once you have a few hundred of these you can
@@ -899,6 +1004,7 @@ def set_outcome(quote_id: int, outcome: str = Form(...)):
         )
         if cur.rowcount == 0:
             raise HTTPException(404, f"No quote {quote_id}")
+        orders.add_event(conn, quote_id, actor(request), "print outcome", outcome)
     return {"id": quote_id, "outcome": outcome}
 
 
@@ -962,6 +1068,7 @@ def get_thumbnail(quote_id: int, plate: int):
 @app.post("/api/orders/{quote_id}/payment")
 def set_payment(
     quote_id: int,
+    request: Request,
     status: str = Form(...),
     method: str | None = Form(None),
 ):
@@ -972,15 +1079,33 @@ def set_payment(
     allowed = config["receipt"].get("payment_methods") or []
     if status == "paid" and method and allowed and method not in allowed:
         raise HTTPException(400, f"method must be one of {allowed}")
-    paid_at = (datetime.now(timezone.utc).isoformat(timespec="seconds")
-               if status == "paid" else None)
-    with db() as conn:
-        cur = conn.execute(
-            "UPDATE quotes SET payment_status = ?, payment_method = ?, paid_at = ?"
-            " WHERE id = ?",
-            (status, method if status == "paid" else None, paid_at, quote_id),
-        )
-        if cur.rowcount == 0:
-            raise HTTPException(404, f"No quote {quote_id}")
+    try:
+        paid_at = orders.record_payment(quote_id, status, method, actor(request))
+    except orders.OrderError as exc:
+        raise HTTPException(404, f"No quote {quote_id}") from exc
     return {"id": quote_id, "payment_status": status, "payment_method": method,
             "paid_at": paid_at}
+
+
+# ---------------------------------------------------------------------------
+# pages
+# ---------------------------------------------------------------------------
+
+@app.get("/orders")
+def orders_page():
+    return FileResponse(BASE / "static" / "orders.html")
+
+
+@app.get("/orders/{quote_id:int}")
+def order_page(quote_id: int):
+    return FileResponse(BASE / "static" / "order.html")
+
+
+@app.get("/admin")
+def admin_page():
+    return FileResponse(BASE / "static" / "admin.html")
+
+
+@app.get("/account")
+def account_page():
+    return FileResponse(BASE / "static" / "account.html")

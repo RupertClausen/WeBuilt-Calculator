@@ -33,10 +33,12 @@ FOLDER = "webuilt-quote"
 
 # Shipped to teammates. Everything else in the repository (tests, CI, tools,
 # editor settings) stays out of the download.
-INCLUDE_FILES = ["app.py", "pricing.py", "receipt.py", "slicefile.py", "serve.py",
+INCLUDE_FILES = ["app.py", "core.py", "auth.py", "orders.py", "sheets.py",
+                 "housekeeping.py", "manage.py",
+                 "pricing.py", "receipt.py", "slicefile.py", "serve.py",
                  "launch.py", "updater.py", "release.json", "requirements.txt",
                  "run.sh", "run.bat", "README.md", "CHANGELOG.md"]
-INCLUDE_DIRS = ["config", "locales", "static", "docs"]
+INCLUDE_DIRS = ["config", "locales", "static", "docs", "deploy"]
 
 # Fixed timestamp so the same source always gives the same zip.
 ZIP_DATE = (2020, 1, 1, 0, 0, 0)

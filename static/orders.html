@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orders · WeBuilt Quote</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/nav.css">
+<style>
+  .qs { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .qs select { width:100%; max-width:180px; min-width:108px; padding:4px 6px; font-size:13px; }
+  /* Only the table scrolls sideways on a very narrow screen, never the page. */
+  .tablewrap { overflow-x:auto; }
+  .qs select.live { border-color:var(--accent); color:var(--accent); }
+  .qs select.closed { color:var(--muted); }
+  .qs .next { padding:4px 9px; font-size:12px; font-weight:600; }
+  .qs select.paid { border-color:var(--ok); color:var(--ok); }
+  tr.saving td { opacity:.55; }
+  tr.flash td { background:color-mix(in srgb, var(--ok) 12%, transparent); transition:background .6s; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Orders</h1>
+  <div class="sub" id="count">&nbsp;</div>
+  <div id="msg" class="msg" role="status"></div>
+
+  <div class="row" style="margin:16px 0">
+    <div><label for="status">Status</label><select id="status"></select></div>
+    <div style="flex:3 1 260px"><label for="q">Search</label>
+      <input id="q" type="search" placeholder="Receipt no., customer, contact, file or notes"></div>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr>
+      <th>Receipt</th><th class="hide-sm">Date</th><th>Customer</th><th>Status</th>
+      <th>Payment</th><th class="num">Total</th><th class="hide-sm">Handled by</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+  <div style="margin-top:16px"><button id="more" class="ghost" hidden>Show more</button></div>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+const PAGE = 50;
+let offset = 0, total = 0, statuses = [], methods = [];
+
+// Change status right from the list: a dropdown for any status, and a
+// one-click button for the usual next step. "pick_only" statuses (Cancelled)
+// are never reached by the button, only chosen on purpose.
+function nextStatus(id) {
+  const i = statuses.findIndex(s => s.id === id);
+  if (i < 0 || statuses[i].pick_only) return null;
+  return statuses.slice(i + 1).find(s => !s.pick_only) || null;
+}
+
+function statusCell(o) {
+  const cur = statuses.find(s => s.id === o.status);
+  const nx = nextStatus(o.status);
+  return `<div class="qs">
+    <select data-act="status" aria-label="Status of ${esc(o.receipt_no || o.id)}"
+            class="${cur?.closes ? 'closed' : 'live'}">${statuses.map(s =>
+      `<option value="${esc(s.id)}"${s.id === o.status ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}
+    </select>
+    ${nx ? `<button class="next ghost" data-act="next" data-to="${esc(nx.id)}"
+             title="Move to ${esc(nx.label)} · ${esc(nx.label_th || '')}">→ ${esc(nx.label)}</button>` : ''}
+  </div>`;
+}
+
+// Payment in one pick: "Unpaid" or "Paid · <method>", saved straight away.
+function paymentCell(o) {
+  const paid = o.payment_status === 'paid';
+  const cur = paid ? 'paid:' + (o.payment_method || '') : 'unpaid';
+  const opts = [['unpaid', 'Unpaid'], ...methods.map(m => ['paid:' + m, 'Paid · ' + m])];
+  if (paid && !opts.some(([v]) => v === cur)) opts.push([cur, 'Paid' + (o.payment_method ? ' · ' + o.payment_method : '')]);
+  return `<div class="qs"><select data-act="pay" class="${paid ? 'paid' : ''}"
+      aria-label="Payment for ${esc(o.receipt_no || o.id)}">${opts.map(([v, l]) =>
+      `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`;
+}
+
+function rowHtml(o) {
+  return `<tr class="click" data-id="${o.id}">
+      <td><strong class="nowrap">${esc(o.receipt_no || '#' + o.id)}</strong>
+        <div class="muted">${esc(o.filename || '')}</div></td>
+      <td class="hide-sm nowrap">${esc(bangkokDate(o.created_at, false))}</td>
+      <td>${esc(o.customer_name || '')}<div class="muted">${esc(o.customer_contact || '')}</div></td>
+      <td>${statusCell(o)}</td>
+      <td>${paymentCell(o)}</td>
+      <td class="num">${money(o.total, o.currency)}</td>
+      <td class="hide-sm">${esc(o.handled_by || '')}</td>
+    </tr>`;
+}
+
+async function setPayment(tr, value) {
+  const fd = new FormData();
+  const [status, method] = value === 'unpaid' ? ['unpaid', ''] : ['paid', value.slice(5)];
+  fd.append('status', status);
+  if (method) fd.append('method', method);
+  return change(tr, async id => {
+    await api(`/api/orders/${id}/payment`, { method: 'POST', body: fd });
+    return (await api(`/api/orders/${id}`)).data;
+  }, o => o.payment_status === 'paid' ? `paid${o.payment_method ? ' (' + o.payment_method + ')' : ''}` : 'unpaid');
+}
+
+function setStatus(tr, to) {
+  return change(tr, async id => (await api(`/api/orders/${id}`,
+    { method: 'PATCH', json: { status: to } })).data, o => o.status_label);
+}
+
+// Save one change for one row, redraw that row, and say what happened.
+async function change(tr, save, describe) {
+  const id = tr.dataset.id, receipt = tr.querySelector('strong').textContent;
+  tr.classList.add('saving');
+  tr.querySelectorAll('select, button').forEach(el => el.disabled = true);
+  try {
+    const o = await save(id);
+    tr.outerHTML = rowHtml(o);
+    const fresh = $(`#rows tr[data-id="${id}"]`);
+    fresh.classList.add('flash');
+    setTimeout(() => fresh.classList.remove('flash'), 900);
+    $('#msg').className = 'msg ok';
+    $('#msg').textContent = `${receipt} → ${describe(o)}`;
+  } catch (e) {
+    tr.classList.remove('saving');
+    tr.querySelectorAll('select, button').forEach(el => el.disabled = false);
+    tr.querySelectorAll('select').forEach(sel => sel.value = sel.querySelector('option[selected]').value);
+    $('#msg').className = 'msg bad';
+    $('#msg').textContent = `${receipt}: ${e.message}`;
+  }
+}
+
+async function load(reset = true) {
+  if (reset) { offset = 0; $('#rows').innerHTML = ''; }
+  const p = new URLSearchParams({ limit: PAGE, offset });
+  if ($('#status').value) p.set('status', $('#status').value);
+  if ($('#q').value.trim()) p.set('q', $('#q').value.trim());
+  const { data, res } = await api('/api/orders?' + p);
+  total = +res.headers.get('X-Total-Count') || data.length;
+  $('#rows').insertAdjacentHTML('beforeend', data.map(rowHtml).join(''));
+  offset += data.length;
+  $('#count').textContent = `${total} order${total === 1 ? '' : 's'}`;
+  $('#more').hidden = offset >= total;
+}
+
+$('#rows').onclick = e => {
+  if (e.target.closest('.qs')) {                     // the status controls, not "open"
+    const btn = e.target.closest('button[data-act="next"]');
+    if (btn) setStatus(btn.closest('tr'), btn.dataset.to);
+    return;
+  }
+  const tr = e.target.closest('tr[data-id]');
+  if (tr) location.href = '/orders/' + tr.dataset.id;
+};
+$('#rows').onchange = e => {
+  if (e.target.matches('select[data-act="status"]')) setStatus(e.target.closest('tr'), e.target.value);
+  if (e.target.matches('select[data-act="pay"]')) setPayment(e.target.closest('tr'), e.target.value);
+};
+$('#more').onclick = () => load(false);
+$('#status').onchange = () => { localStorage.setItem('ordersStatus', $('#status').value); load(); };
+let t; $('#q').oninput = () => { clearTimeout(t); t = setTimeout(load, 250); };
+
+(async () => {
+  await renderNav('orders');
+  [statuses, methods] = await Promise.all([api('/api/statuses').then(r => r.data),
+    api('/api/options').then(r => r.data.payment_methods || [])]);
+  $('#status').innerHTML = `<option value="open">Open orders</option><option value="">All</option>` +
+    statuses.map(s => `<option value="${esc(s.id)}">${esc(s.label)} · ${esc(s.label_th || '')}</option>`).join('');
+  try { const saved = localStorage.getItem('ordersStatus'); if (saved !== null) $('#status').value = saved; } catch (e) {}
+  load();
+})();
+</script>
+</body>
+</html>

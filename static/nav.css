@@ -1,0 +1,12 @@
+/* Top bar shared by every page. Uses the page's own colour tokens. */
+.topnav { display:flex; align-items:center; gap:4px 16px; flex-wrap:wrap;
+          max-width:1040px; margin:0 auto; padding:10px 16px;
+          border-bottom:1px solid var(--line); font-size:14px; }
+.topnav .brand { font-weight:700; margin-right:8px; color:var(--fg); text-decoration:none; }
+.topnav a.link { color:var(--muted); text-decoration:none; padding:6px 2px;
+                 border-bottom:2px solid transparent; }
+.topnav a.link.on { color:var(--fg); border-bottom-color:var(--accent); }
+.topnav .me { margin-left:auto; color:var(--muted); display:flex; gap:12px; align-items:center; }
+.topnav .me a, .topnav .me button { color:var(--muted); background:none; border:0; padding:0;
+                 font:inherit; cursor:pointer; text-decoration:none; }
+.topnav .me a:hover, .topnav .me button:hover { color:var(--fg); }

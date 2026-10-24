@@ -153,6 +153,7 @@
   .chip { background: var(--panel); border: 1px solid var(--line);
           border-radius: 999px; padding: 3px 10px; color: var(--muted); }
 </style>
+<link rel="stylesheet" href="/static/nav.css">
 </head>
 <body>
 <div class="wrap">
@@ -225,8 +226,9 @@
   <div id="out"></div>
 </div>
 
+<script src="/static/common.js"></script>
 <script>
-const $ = s => document.querySelector(s);
+// $, esc and the top bar come from common.js
 let chosen = [], opts = null, mode = 'upload';
 
 async function loadOptions() {
@@ -245,6 +247,7 @@ async function loadOptions() {
   setMode('upload');
 }
 loadOptions();
+renderNav('quote');
 
 // --- version, updates, broken settings --------------------------------
 async function loadVersion(refresh = false) {

@@ -3,6 +3,27 @@
 What changed in each version. The newest section is shown in the app as
 **What's new** when the update is offered.
 
+## [Unreleased]
+
+### Team server
+- One shared copy for the whole team (switched on in local/server.yaml), with
+  a login per person: admins (price lists, accounts, sheet, updates) and
+  members (quoting and orders).
+- Orders: statuses from quoted to delivered, who's handling it, notes,
+  payment, and the full history of who changed what.
+- Uploaded files are kept with each order, downloadable, and more can be
+  attached later. Kept 90 days after an order closes.
+- Google Sheet mirror: every order on its own tab of the queue spreadsheet,
+  in Thai, updated a few seconds after any change.
+- Daily database backups.
+- New pages: Orders, an order's page, Admin, Account, and a login page.
+
+### Also
+- Every dependency is now pinned, including the ones pulled in indirectly,
+  so all installs are identical.
+- Browsers always check for a newer copy of the app's pages and scripts, so
+  an update can't leave someone running old scripts.
+
 ## [1.1.1] - 2026-10-23
 
 ### Receipt numbers

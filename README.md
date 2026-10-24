@@ -12,6 +12,7 @@ except the occasional check for a newer version.
   [Problems](#problems)
 - How the pricing works: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)
 - Publishing a new version: [docs/RELEASING.md](docs/RELEASING.md)
+- Running one shared copy for the team: [docs/TEAM-SERVER.md](docs/TEAM-SERVER.md)
 
 ## Install
 
