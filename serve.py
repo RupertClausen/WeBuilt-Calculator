@@ -3,7 +3,8 @@
     python serve.py [--port 8000] [--no-browser]
 
 Listens on 127.0.0.1 only, so the app is reachable from this computer and
-nowhere else. If the port is taken, the next free one up to +10 is used.
+nowhere else. If the port is taken, the next free one up to +10 is used;
+in team-server mode it waits for that exact port instead.
 
 Exit code 75 means "update requested from the app": the launcher then runs
 the updater and starts the app again.
@@ -24,15 +25,37 @@ import webbrowser
 UPDATE_EXIT_CODE = 75
 
 
+def port_is_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        # Same as uvicorn on Linux: connections from before a restart linger
+        # (TIME_WAIT) and must not make the port look taken. Not on Windows,
+        # where this option would let us bind a port another app is using.
+        if os.name != "nt":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
 def free_port(start: int, tries: int = 10) -> int:
     for port in range(start, start + tries):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
+        if port_is_free(port):
+            return port
     raise SystemExit(f"No free port between {start} and {start + tries - 1}.")
+
+
+def exact_port(port: int, wait: float = 30) -> int:
+    """The team server sits behind a proxy pointed at one port; moving to
+    another would take the site down. Wait for it, or stop with an error
+    (systemd then tries again)."""
+    deadline = time.monotonic() + wait
+    while not port_is_free(port):
+        if time.monotonic() > deadline:
+            raise SystemExit(f"Port {port} is in use; not starting on another one.")
+        time.sleep(1)
+    return port
 
 
 def open_browser(url: str) -> None:
@@ -64,7 +87,7 @@ def main() -> int:
     import uvicorn
     import app as webapp
 
-    port = free_port(args.port)
+    port = exact_port(args.port) if webapp.server_mode() else free_port(args.port)
     config = uvicorn.Config(webapp.app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     wants_update = threading.Event()

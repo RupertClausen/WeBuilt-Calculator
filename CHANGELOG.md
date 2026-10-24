@@ -23,6 +23,8 @@ What changed in each version. The newest section is shown in the app as
   so all installs are identical.
 - Browsers always check for a newer copy of the app's pages and scripts, so
   an update can't leave someone running old scripts.
+- Restarting no longer moves the app to another port while the old one is
+  still winding down; the team server always waits for its own port.
 
 ## [1.1.1] - 2026-10-23
 
