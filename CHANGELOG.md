@@ -3,7 +3,7 @@
 What changed in each version. The newest section is shown in the app as
 **What's new** when the update is offered.
 
-## [Unreleased]
+## [1.2.0] - 2026-10-24
 
 ### Team server
 - One shared copy for the whole team (switched on in local/server.yaml), with
