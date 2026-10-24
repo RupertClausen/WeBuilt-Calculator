@@ -23,8 +23,12 @@ sheet. Everything else has defaults in `config/server.yaml`.
 Then create the first admin, from the server's terminal:
 
 ```bash
-python manage.py add-user yourname --admin --name "Your Name"
+cd /opt/webuilt-quote
+runuser -u webuilt -- .venv/bin/python manage.py add-user yourname --admin --name "Your Name"
 ```
+
+(`runuser -u webuilt` runs it as the app's own user, so the database stays
+owned by it.)
 
 It asks for the password without showing it. After that, admins add everyone
 else from the **Admin** page. `manage.py` can also reset a password, change a
