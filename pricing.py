@@ -35,6 +35,7 @@ spreadsheet review:
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, asdict, field
 
@@ -308,6 +309,102 @@ def resolve_discount(request: dict | None, pricing: dict) -> dict | None:
             "kind": kind, "value": value}
 
 
+# ---------------------------------------------------------------------------
+# special additions
+# ---------------------------------------------------------------------------
+#
+# Extra work the calculator can't see: repairing a model, sanding, acetone,
+# airbrushing, inserts. Each is a named line at a fixed price the engineer
+# sets, added AFTER the margin, discount, minimum and rounding:
+#
+#   * not marked up — the engineer's price is what the customer pays;
+#   * never discounted — a discount comes off the printing, not the extras;
+#   * added after rounding, so a ฿20 repair arrives as exactly ฿20.
+#
+# Because nothing upstream depends on them, a saved order's additions can be
+# changed later without re-pricing the print (see with_additions).
+
+ADDITION_PREFIX = "addition_"
+
+
+def resolve_additions(raw, pricing: dict) -> list[dict]:
+    """Validate a list of additions.
+
+    Each item is {"preset": key} (amount from the preset unless given), or
+    {"label": text, "amount": n}; either may carry "reason" (printed on the
+    receipt) and "label_th".
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise QuoteInputError("Special additions must be a JSON list.") from None
+    if not isinstance(raw, list):
+        raise QuoteInputError("Special additions must be a list.")
+    cfg = pricing.get("special_additions") or {}
+    presets = cfg.get("presets") or {}
+    limit = float(cfg.get("max_amount", 100000))
+    out = []
+    for i, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise QuoteInputError(f"Special addition {i} is not understood.")
+        key = item.get("preset") or None
+        spec = {}
+        if key:
+            spec = presets.get(key)
+            if spec is None:
+                raise QuoteInputError(f"Unknown special addition '{key}'.")
+        label = str(item.get("label") or spec.get("label") or "").strip()[:120]
+        if not label:
+            raise QuoteInputError(f"Special addition {i} needs a name.")
+        amount = item.get("amount")
+        if amount in (None, ""):
+            amount = spec.get("amount")
+        try:
+            amount = round(float(amount), 2)
+        except (TypeError, ValueError):
+            raise QuoteInputError(f"Enter an amount for “{label}”.") from None
+        if not 0 < amount <= limit:
+            raise QuoteInputError(
+                f"“{label}” must cost more than 0 and at most {limit:,.0f}.")
+        label_th = str(item.get("label_th") or spec.get("label_th") or "").strip()[:120]
+        out.append({
+            "preset": key,
+            "label": label,
+            "label_th": label_th or None,
+            "amount": amount,
+            "reason": str(item.get("reason") or "").strip()[:300] or None,
+        })
+    return out
+
+
+def _addition_lines(additions: list[dict]) -> list[LineItem]:
+    return [LineItem(f"{ADDITION_PREFIX}{i}", a["label"], a["amount"], a.get("reason") or "")
+            for i, a in enumerate(additions, start=1)]
+
+
+def with_additions(quote: dict, additions: list[dict]) -> dict:
+    """A stored quote (Quote.to_dict() form) with its special additions
+    replaced. The print itself is not re-priced: additions sit after
+    rounding, so the rest of the quote is unchanged."""
+    q = json.loads(json.dumps(quote))            # deep copy; never edit the caller's
+    bd = q.setdefault("breakdown", {})
+    old = sum(l["amount"] for l in q["lines"] if l["key"].startswith(ADDITION_PREFIX))
+    base = bd.get("total_before_additions", round(q["total"] - old, 2))
+    q["lines"] = [l for l in q["lines"] if not l["key"].startswith(ADDITION_PREFIX)]
+    q["lines"] += [asdict(l) for l in _addition_lines(additions)]
+    extra = round(sum(a["amount"] for a in additions), 2)
+    q["total"] = round(base + extra, 2)
+    bd["total_before_additions"] = base
+    bd["special_additions"] = additions
+    econ = bd.setdefault("economics", {})
+    econ["special_additions"] = extra
+    econ["total"] = q["total"]
+    return q
+
+
 def build_quote(
     items,
     *,
@@ -322,12 +419,16 @@ def build_quote(
     client_profile: str | None = None,
     prep_minutes: float | None = None,
     discount: dict | None = None,
+    additions: list | str | None = None,
 ) -> Quote:
     """Price an order of one or more plates.
 
     `items` may be a single SlicedJob, a list of SlicedJob, or a list of
     QuoteItem. Each entry is ONE PLATE and is risked on its own duration.
+    `additions` are special additions (see resolve_additions), added after
+    rounding at exactly the price given.
     """
+    extras = resolve_additions(additions, pricing)
 
     # --- normalise the input ------------------------------------------------
     if isinstance(items, SlicedJob):
@@ -633,6 +734,12 @@ def build_quote(
     if abs(rounding_delta) > 1e-9:
         lines.append(LineItem("rounding", "Rounding / minimum", rounding_delta))
 
+    # Special additions: after rounding, never marked up or discounted.
+    total_before_additions = total
+    lines += _addition_lines(extras)
+    additions_total = round(sum(a["amount"] for a in extras), 2)
+    total = total + additions_total
+
     true_cost = agg["material_cost"] + agg["electricity"] + agg["maintenance"]
     margin = total - true_cost
 
@@ -673,6 +780,9 @@ def build_quote(
         "profit_after_discount": round(profit - discount_amount, 2),
         "delivery": round(delivery_fee, 2),
         "rounding": round(rounding_delta, 2),
+        # Extra work at the engineer's price; its own bucket so profit and
+        # labour reports stay about the printing.
+        "special_additions": additions_total,
         "total": round(total, 2),
     }
 
@@ -735,6 +845,8 @@ def build_quote(
         },
         "subtotal_before_multipliers": round(subtotal, 2),
         "raw_total": round(raw_total, 2),
+        "special_additions": extras,
+        "total_before_additions": round(total_before_additions, 2),
     }
 
     return Quote(

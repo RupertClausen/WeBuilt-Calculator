@@ -251,3 +251,44 @@ discounts:
     #   label: "First order"
     #   label_th: "ออเดอร์แรก"
     #   amount: 30
+
+# ---------------------------------------------------------------------------
+# Special additions
+# ---------------------------------------------------------------------------
+# Extra work the calculator can't see, added by the engineer as its own line:
+# model repair, sanding, acetone smoothing, airbrushing, inserts…
+#
+#   * The engineer's price is what the customer pays: no margin on top.
+#   * Never discounted, and added after rounding, so ฿20 arrives as ฿20.
+#   * Can be added or changed on an order after quoting (until it's paid).
+#
+# Presets are one-click shortcuts. `amount` pre-fills the price; leave it out
+# (or null) when it differs every time and the engineer types it. Anything
+# not listed can still be added by name. On the receipt the line shows the
+# label (label_th on Thai receipts) and the reason the engineer typed.
+#
+# The amounts below are not set yet: fill in your usual prices.
+
+special_additions:
+  max_amount: 20000            # refuse a typo like 25000 for ฿250
+  presets:
+    model_repair:
+      label: "Model repair"
+      label_th: "ซ่อมไฟล์โมเดล"
+      amount: null
+    sanding:
+      label: "Sanding"
+      label_th: "ขัดผิวชิ้นงาน"
+      amount: null
+    acetone:
+      label: "Acetone smoothing (ABS)"
+      label_th: "อบไออะซิโตน (ABS)"
+      amount: null
+    airbrush:
+      label: "Airbrush colouring"
+      label_th: "พ่นสีแอร์บรัช"
+      amount: null
+    inserts:
+      label: "Heat-set inserts"
+      label_th: "ฝังเกลียวทองเหลือง"
+      amount: null

@@ -3,6 +3,40 @@
 What changed in each version. The newest section is shown in the app as
 **What's new** when the update is offered.
 
+## [1.3.0] - 2026-11-09
+
+### Special additions
+- Extra work the calculator can't see (model repair, sanding, acetone,
+  airbrush, inserts, or anything typed by name) is added as its own line at
+  exactly the engineer's price: no margin, no discount, after rounding.
+- On the quote page, and on an order afterwards until it's paid. Shown on
+  receipts in English and Thai with the engineer's reason.
+- One-click presets in config/pricing.yaml (prices still to be filled in).
+
+### Printers and the plate queue
+- Normal and Large are now printer *categories*; add the actual machines in
+  each (P2S #1, P2S #2…) on the new **Printers** page. Quotes still price by
+  category, so adding a printer changes no price.
+- Moving an order to *In queue* puts each of its plates in its category's
+  queue. Start a plate on a free printer, pin it to one, or reorder; the
+  page shows what each printer is printing and when the next plates start.
+- *Finished* / *Failed — reprint* per plate: a failure counts against that
+  printer and the reprint goes to the front of the queue. The first plate
+  started moves the order to Printing; the last one finished moves it to
+  Ready.
+
+### Order statuses
+- New list: Needs review, Not accepted, Awaiting payment, Slip to check, In
+  queue, Printing, Ready, Shipped, Done, Cancelled. Existing orders move over
+  by themselves when the app updates: Quoted → Awaiting payment, Done →
+  Ready, Delivered → Done. New quotes start at Awaiting payment.
+
+### Also
+- The database now upgrades in numbered steps, and refuses to run on a
+  database from a newer version (after a rollback) instead of touching it.
+- Release packages include the new `webuilt/` code; a test checks every
+  module ships.
+
 ## [1.2.0] - 2026-10-24
 
 ### Team server

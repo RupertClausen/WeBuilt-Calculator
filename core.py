@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 import receipt as receipt_doc
+from webuilt import migrations
 
 BASE = Path(__file__).parent
 CONFIG_DIR = BASE / "config"
@@ -180,159 +181,10 @@ def db():
 
 
 def init_db() -> None:
+    """Bring the database up to the current schema. The steps live in
+    webuilt/migrations.py, numbered, each run once."""
     with db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quotes (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at    TEXT NOT NULL,
-                filename      TEXT,
-                printer       TEXT,
-                materials     TEXT,
-                grams         REAL,
-                hours         REAL,
-                plates        INTEGER,
-                rush          TEXT,
-                delivery      TEXT,
-                total         REAL,
-                currency      TEXT,
-                est_cost      REAL,
-                est_margin    REAL,
-                p_success     REAL,
-                risk_factor   REAL,
-                outcome       TEXT DEFAULT 'quoted',
-                detail_json   TEXT
-            )
-            """
-        )
-        # `outcome` is here so you can mark a job completed/failed later and
-        # back-fit each printer's real failure rate from your own history.
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_quotes_created ON quotes(created_at)"
-        )
-
-        # Columns added for receipts. ALTER only what is missing, so an
-        # existing orders.db upgrades in place.
-        have = {r["name"] for r in conn.execute("PRAGMA table_info(quotes)")}
-        for col, ddl in (
-            ("receipt_no", "TEXT"),
-            ("customer_name", "TEXT"),
-            ("customer_contact", "TEXT"),
-            ("notes", "TEXT"),
-            ("payment_status", "TEXT DEFAULT 'unpaid'"),
-            ("payment_method", "TEXT"),
-            ("paid_at", "TEXT"),
-            # Where the money goes, so a month of orders can be summed.
-            ("labour", "REAL"),
-            ("contingency", "REAL"),
-            ("profit", "REAL"),
-            # Which release (and so which price list) produced the quote.
-            ("app_version", "TEXT"),
-            # The discount given and why; `profit` is what was kept after it.
-            ("discount", "REAL"),
-            ("discount_label", "TEXT"),
-            # 1 when the app chose the receipt number, NULL when typed by
-            # hand. Only app-chosen numbers move the automatic counter.
-            ("receipt_auto", "INTEGER"),
-        ):
-            if col not in have:
-                conn.execute(f"ALTER TABLE quotes ADD COLUMN {col} {ddl}")
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_receipt"
-            " ON quotes(receipt_no) WHERE receipt_no IS NOT NULL"
-        )
-        # Plate pictures live apart from detail_json so the quote record
-        # stays small. `plate` matches breakdown.plates[].plate.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS plate_thumbnails (
-                quote_id  INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
-                plate     INTEGER NOT NULL,
-                mime      TEXT NOT NULL,
-                data      BLOB NOT NULL,
-                PRIMARY KEY (quote_id, plate)
-            )
-            """
-        )
-
-        # --- team server -----------------------------------------------------
-        # Order workflow and who did what. Existing rows start as 'quoted'.
-        have = {r["name"] for r in conn.execute("PRAGMA table_info(quotes)")}
-        for col, ddl in (
-            ("status", "TEXT NOT NULL DEFAULT 'quoted'"),
-            ("created_by", "TEXT"),
-            ("handled_by", "TEXT"),
-            ("updated_at", "TEXT"),
-            ("closed_at", "TEXT"),     # when it reached a closing status
-        ):
-            if col not in have:
-                conn.execute(f"ALTER TABLE quotes ADD COLUMN {col} {ddl}")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status)")
-
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                display_name  TEXT,
-                pw_hash       TEXT NOT NULL,
-                role          TEXT NOT NULL DEFAULT 'member',
-                active        INTEGER NOT NULL DEFAULT 1,
-                created_at    TEXT NOT NULL,
-                last_login    TEXT,
-                failed_logins INTEGER NOT NULL DEFAULT 0,
-                locked_until  TEXT
-            );
-            -- Only a hash of each session token is stored, so a copy of the
-            -- database can't be used to log in as anyone.
-            CREATE TABLE IF NOT EXISTS sessions (
-                token_hash  TEXT PRIMARY KEY,
-                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                created_at  TEXT NOT NULL,
-                expires_at  TEXT NOT NULL,
-                last_seen   TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS order_files (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                quote_id     INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
-                name         TEXT NOT NULL,
-                stored_as    TEXT NOT NULL,
-                size         INTEGER NOT NULL,
-                sha256       TEXT NOT NULL,
-                kind         TEXT NOT NULL DEFAULT 'sliced',
-                uploaded_at  TEXT NOT NULL,
-                uploaded_by  TEXT,
-                deleted_at   TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_files_quote ON order_files(quote_id);
-            CREATE TABLE IF NOT EXISTS order_events (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                quote_id  INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
-                at        TEXT NOT NULL,
-                user      TEXT,
-                action    TEXT NOT NULL,
-                detail    TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_events_quote ON order_events(quote_id);
-            -- A record of every deleted order. Its receipt number stays
-            -- reserved: a number a customer may already hold is never reused.
-            CREATE TABLE IF NOT EXISTS deleted_orders (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                quote_id      INTEGER NOT NULL,
-                receipt_no    TEXT,
-                receipt_auto  INTEGER,
-                deleted_at    TEXT NOT NULL,
-                deleted_by    TEXT,
-                summary       TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_deleted_receipt ON deleted_orders(receipt_no);
-            -- Small key/value store: sheet sync status, last backup, etc.
-            CREATE TABLE IF NOT EXISTS app_state (
-                key    TEXT PRIMARY KEY,
-                value  TEXT
-            );
-            """
-        )
+        migrations.run(conn)
 
 
 init_db()

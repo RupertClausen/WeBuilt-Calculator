@@ -30,16 +30,25 @@ lockout_minutes: 10
 # ---------------------------------------------------------------------------
 # In order, as they appear in the app and the sheet. `closes: true` means the
 # job is finished: the file-retention clock starts when an order first
-# reaches one of these. The Orders list has a one-click "next step" button
-# that moves an order to the following status; `pick_only: true` statuses
-# are skipped by it and can only be chosen from the dropdown.
+# reaches one of these. The Orders list has a one-click "next step" button:
+# it moves an order to its `next` status, or else the following status that
+# isn't `pick_only`. `pick_only: true` statuses are skipped by it and can
+# only be chosen from the dropdown.
+#
+# v2 (1.3): v1's quoted / done / delivered became awaiting_payment / ready /
+# done; existing orders were moved over when the database upgraded.
+# review, rejected and slip_check are used once customers order online.
 statuses:
-  quoted:    {label: "Quoted",    label_th: "เสนอราคา"}
-  queued:    {label: "In queue",  label_th: "รอพิมพ์"}
-  printing:  {label: "Printing",  label_th: "กำลังปริ้น"}
-  done:      {label: "Done",      label_th: "เสร็จสิ้น", closes: true}
-  delivered: {label: "Delivered", label_th: "ส่งแล้ว",  closes: true}
-  cancelled: {label: "Cancelled", label_th: "ยกเลิก",   closes: true, pick_only: true}
+  review:           {label: "Needs review",     label_th: "รอตรวจไฟล์",  pick_only: true, next: awaiting_payment}
+  rejected:         {label: "Not accepted",     label_th: "ไม่รับงาน",    closes: true, pick_only: true}
+  awaiting_payment: {label: "Awaiting payment", label_th: "รอชำระเงิน",   next: queued}
+  slip_check:       {label: "Slip to check",    label_th: "รอตรวจสลิป",  pick_only: true, next: queued}
+  queued:           {label: "In queue",         label_th: "รอพิมพ์"}
+  printing:         {label: "Printing",         label_th: "กำลังปริ้น"}
+  ready:            {label: "Ready",            label_th: "พร้อมส่งมอบ",  next: done}
+  shipped:          {label: "Shipped",          label_th: "จัดส่งแล้ว",   pick_only: true, next: done}
+  done:             {label: "Done",             label_th: "เสร็จสิ้น",    closes: true}
+  cancelled:        {label: "Cancelled",        label_th: "ยกเลิก",      closes: true, pick_only: true}
 
 # ---------------------------------------------------------------------------
 # Uploaded files

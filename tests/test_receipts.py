@@ -12,6 +12,7 @@ os.environ["WEBUILT_DB"] = str(pathlib.Path(tempfile.mkdtemp()) / "orders.db")
 
 from fastapi.testclient import TestClient
 import app as appmod
+import core
 import receipt as receipt_doc
 
 client = TestClient(appmod.app)
@@ -250,7 +251,11 @@ def test_thai_receipt():
     qid = q["quote_id"]
     v = client.get(f"/api/receipt/{qid}?lang=th").json()
     assert v["lang"] == "th" and v["title"] == "ใบเสนอราคา"
-    assert "2569" in v["date"] and "ต.ค." in v["date"], v["date"]     # Buddhist Era
+    # Buddhist Era year and Thai month name of today (the test used to
+    # assume it ran in October 2026)
+    now = core.local_now()
+    assert str(now.year + 543) in v["date"], v["date"]
+    assert receipt_doc.THAI_MONTHS[now.month - 1] in v["date"], v["date"]
     assert v["order"]["rush"] == "ภายในวันถัดไป"
     assert v["order"]["delivery"] == "ส่งให้ที่มหาลัย"
     assert v["terms"][0].startswith("ค่าเผื่องานพิมพ์เสีย")

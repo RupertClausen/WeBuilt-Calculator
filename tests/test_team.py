@@ -138,7 +138,7 @@ def test_quotes_record_who():
     pim = client("pim", "pim-password-1")
     d = quote(pim).json()
     o = pim.get(f"/api/orders/{d['quote_id']}").json()
-    assert o["created_by"] == "pim" and o["status"] == "quoted"
+    assert o["created_by"] == "pim" and o["status"] == "awaiting_payment"
     assert o["events"][0]["user"] == "pim" and o["events"][0]["action"] == "created"
     assert pim.get("/api/me").json()["user"]["username"] == "pim"
     print(f"  who             quote {d['receipt_no']} created by pim, history starts with it")

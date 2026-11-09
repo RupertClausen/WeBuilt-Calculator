@@ -81,7 +81,8 @@ def test_attachments():
 def test_status_workflow_and_history():
     qid = upload(["orca_tiny_pla.gcode"])["quote_id"]
     n0 = len(CHANGES)
-    for st in ("queued", "printing", "done"):
+    assert c.get(f"/api/orders/{qid}").json()["status"] == "awaiting_payment"
+    for st in ("queued", "printing", "ready", "done"):
         r = c.patch(f"/api/orders/{qid}", json={"status": st})
         assert r.status_code == 200 and r.json()["status"] == st
     o = r.json()
@@ -93,14 +94,14 @@ def test_status_workflow_and_history():
     c.patch(f"/api/orders/{qid}", json={"handled_by": "pim", "notes": "white PLA only",
                                         "customer_name": "K'Test", "customer_contact": "LINE @t"})
     o = c.get(f"/api/orders/{qid}").json()
-    acts = [e["action"] for e in o["events"]]
-    assert acts[:5] == ["created", "status", "status", "status", "status"]
+    acts = [e["action"] for e in o["events"] if e["action"] != "queue"]
+    assert acts[:6] == ["created", "status", "status", "status", "status", "status"]
     assert {"handled by", "notes", "customer name", "customer contact"} <= set(acts)
-    assert "Printing → Done" in [e["detail"] for e in o["events"]]
+    assert "Ready → Done" in [e["detail"] for e in o["events"]]
     assert o["handled_by"] == "pim" and o["notes"] == "white PLA only"
     assert len(CHANGES) > n0
-    print("  workflow        quoted→queued→printing→done sets closed_at; reopening clears it; "
-          "every change in history")
+    print("  workflow        awaiting payment→queued→printing→ready→done sets closed_at; "
+          "reopening clears it; every change in history")
 
 
 def test_payment_goes_into_history():
@@ -123,17 +124,21 @@ def test_list_filter_search_and_count():
     page2 = c.get("/api/orders", params={"limit": 2, "offset": 2}).json()
     assert len(page2) == 2
     st = c.get("/api/statuses").json()
-    assert [s["id"] for s in st][:3] == ["quoted", "queued", "printing"]
-    assert {s["id"] for s in st if s["closes"]} == {"done", "delivered", "cancelled"}
+    assert [s["id"] for s in st] == ["review", "rejected", "awaiting_payment", "slip_check",
+                                     "queued", "printing", "ready", "shipped", "done", "cancelled"]
+    assert {s["id"] for s in st if s["closes"]} == {"rejected", "done", "cancelled"}
     # the list's one-click "next step" button never lands on these
-    assert {s["id"] for s in st if s["pick_only"]} == {"cancelled"}
+    assert {s["id"] for s in st if s["pick_only"]} == {
+        "review", "rejected", "slip_check", "shipped", "cancelled"}
+    # a cash walk-in goes straight from awaiting payment to the queue
+    assert {s["id"]: s["next"] for s in st}["awaiting_payment"] == "queued"
     print(f"  list            search, 'open' hides closed, status filter, paging, X-Total-Count")
 
 
 def test_retention_removes_files_not_orders():
     qid = upload(["bambu_two_plates.gcode.3mf"])["quote_id"]
     keep = upload(["orca_tiny_pla.gcode"])["quote_id"]           # stays open
-    c.patch(f"/api/orders/{qid}", json={"status": "delivered"})
+    c.patch(f"/api/orders/{qid}", json={"status": "done"})
     later = datetime.now(timezone.utc) + timedelta(days=91)
     assert orders.delete_expired_files(0, later) == 0             # 0 = keep forever
     n = orders.delete_expired_files(90, later)

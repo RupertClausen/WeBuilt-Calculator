@@ -100,6 +100,12 @@ def test_release_zip_contents():
         assert b"\r\n" not in zf.read("webuilt-quote/run.sh")
         manifest = json.loads(zf.read("webuilt-quote/MANIFEST.json"))
         assert "app.py" in manifest["files"] and "MANIFEST.json" not in manifest["files"]
+        # every Python module the app imports must ship, or the release
+        # won't start: the top-level ones and the webuilt/ package
+        repo = pathlib.Path(__file__).resolve().parents[1]
+        needed = {p.relative_to(repo).as_posix() for p in repo.glob("webuilt/*.py")}
+        needed |= {"app.py", "core.py", "orders.py", "pricing.py"}
+        assert needed <= set(manifest["files"]), needed - set(manifest["files"])
     sha = (V1.parent / (V1.name + ".sha256")).read_text().split()[0]
     assert sha == digest(V1)
     again = make_release("1.0.0", name="1.0.0-again")

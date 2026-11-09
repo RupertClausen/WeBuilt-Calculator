@@ -150,6 +150,8 @@
   .econ tr.neg td { color:#dc2626; }
   .econ tr.profit td { font-weight:700; color:var(--ok); }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 12px; }
+  .chipbtn { padding: 5px 11px; font-size: 13px; border-radius: 99px; background: transparent;
+             color: var(--fg); border: 1px solid var(--line); width: auto; }
   .chip { background: var(--panel); border: 1px solid var(--line);
           border-radius: 999px; padding: 3px 10px; color: var(--muted); }
 </style>
@@ -191,7 +193,7 @@
   </div>
 
   <div class="controls">
-    <div><label for="printer">Printer</label><select id="printer"></select></div>
+    <div><label for="printer">Printer type</label><select id="printer"></select></div>
     <div><label for="rush">Turnaround</label><select id="rush"></select></div>
     <div><label for="delivery">Delivery</label><select id="delivery"></select></div>
     <div id="plates-field"><label for="plates">Plates</label><input type="number" id="plates" min="1" value="1"></div>
@@ -208,6 +210,12 @@
       <input type="text" id="disc-reason" placeholder="e.g. Friend of the club"></div>
   </div>
   <div class="hint" id="profile-hint"></div>
+
+  <div id="extras-box" style="margin-top:12px">
+    <label>Special additions <span class="note">extra work at a fixed price: no margin, no discount</span></label>
+    <div id="extra-presets" style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0"></div>
+    <div id="extra-rows"></div>
+  </div>
 
   <details id="cust" style="margin:14px 0 4px">
     <summary>Customer details for the receipt</summary>
@@ -242,6 +250,7 @@ async function loadOptions() {
   fill($('#delivery'), opts.delivery_options, opts.default_delivery);
   fill($('#profile'), opts.client_profiles, opts.default_client_profile);
   fillDiscounts();
+  fillExtras();
   addMaterialRow();
   showProfileHint();
   setMode('upload');
@@ -299,6 +308,51 @@ async function startUpdate(fromVersion) {
 
 loadVersion();
 setInterval(() => loadVersion(), 30 * 60 * 1000);
+
+// --- special additions ----------------------------------------------------
+// One row per addition. A preset fills the name (and its usual price, when
+// it has one); the price and the reason stay editable.
+let extras = [];
+function fillExtras() {
+  const ps = opts.special_additions || [];
+  $('#extra-presets').innerHTML = ps.map(p =>
+    `<button type="button" class="chipbtn" data-preset="${esc(p.id)}">+ ${esc(p.label)}</button>`).join('') +
+    `<button type="button" class="chipbtn" data-preset="">+ Other…</button>`;
+  $('#extra-presets').onclick = e => {
+    const b = e.target.closest('button[data-preset]');
+    if (!b) return;
+    const p = ps.find(x => x.id === b.dataset.preset);
+    extras.push({ preset: p ? p.id : null, label: p ? p.label : '',
+                  amount: p && p.amount != null ? String(p.amount) : '', reason: '' });
+    renderExtras(true);
+  };
+  renderExtras();
+}
+function renderExtras(focusLast = false) {
+  $('#extra-rows').innerHTML = extras.map((x, i) => `
+    <div class="controls extra-row" data-i="${i}" style="margin:4px 0">
+      <div><input type="text" data-f="label" value="${esc(x.label)}" placeholder="What" aria-label="Addition name"></div>
+      <div><input type="number" data-f="amount" min="0" step="any" value="${esc(x.amount)}" placeholder="฿" aria-label="Amount"></div>
+      <div style="grid-column: span 2; display:flex; gap:6px">
+        <input type="text" data-f="reason" value="${esc(x.reason)}" placeholder="Reason on the receipt (optional)" aria-label="Reason">
+        <button type="button" class="ghost" data-rm="${i}" aria-label="Remove">×</button></div>
+    </div>`).join('');
+  if (focusLast && extras.length) {
+    const row = $('#extra-rows').lastElementChild;
+    row.querySelector(extras.at(-1).label ? '[data-f=amount]' : '[data-f=label]').focus();
+  }
+}
+$('#extra-rows').oninput = e => {
+  const row = e.target.closest('.extra-row'), f = e.target.dataset.f;
+  if (!row || !f) return;
+  const x = extras[+row.dataset.i];
+  x[f] = e.target.value;
+  if (f === 'label') x.preset = null;          // renamed: no longer that preset
+};
+$('#extra-rows').onclick = e => {
+  const b = e.target.closest('button[data-rm]');
+  if (b) { extras.splice(+b.dataset.rm, 1); renderExtras(); }
+};
 
 // --- discounts ----------------------------------------------------------
 function fillDiscounts() {
@@ -458,6 +512,9 @@ function sharedOptions() {
   };
   if ($('#prep').value !== '') o.prep_minutes = +$('#prep').value;
   Object.assign(o, discountFields());
+  const ex = extras.filter(x => x.label.trim() || x.amount !== '');
+  if (ex.length) o.additions = ex.map(x => ({ preset: x.preset || null, label: x.label.trim(),
+                                              amount: x.amount, reason: x.reason.trim() || null }));
   for (const [k, id] of [['customer_name', '#c-name'], ['customer_contact', '#c-contact'],
                          ['notes', '#c-notes'], ['receipt_no', '#c-receipt']]) {
     const val = $(id).value.trim();
@@ -476,7 +533,8 @@ $('#go').onclick = async () => {
       fd.append('files', c.file);
       fd.append('copies', c.copies);
     }
-    for (const [k, v] of Object.entries(sharedOptions())) if (v != null) fd.append(k, v);
+    for (const [k, v] of Object.entries(sharedOptions()))
+      if (v != null) fd.append(k, k === 'additions' ? JSON.stringify(v) : v);
     req = fetch('/api/quote', { method: 'POST', body: fd });
   } else {
     req = fetch('/api/quote/manual', {
@@ -537,6 +595,7 @@ function economicsTable(e, cur) {
             e.profit_after_discount < 0 ? 'neg' : 'profit') : ''}
       ${row('Delivery', e.delivery, 'passed through')}
       ${row('Rounding / minimum', e.rounding)}
+      ${row('Special additions', e.special_additions || 0, 'your price for extra work, passed through')}
       <tr class="sum"><td>Total</td><td class="amt">${money(e.total, cur)}</td></tr>
     </table></div>`;
 }
