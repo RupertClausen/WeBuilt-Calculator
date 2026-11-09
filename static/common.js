@@ -67,7 +67,7 @@ async function renderNav(active) {
     `<a class="link${active === key ? ' on' : ''}" href="${href}">${label}</a>`;
   const isAdmin = !me.server_mode || me.user?.role === 'admin';
   nav.innerHTML = `<a class="brand" href="/">WeBuilt Quote</a>
-    ${link('/', 'Quote', 'quote')}${link('/orders', 'Orders', 'orders')}
+    ${link('/', 'Quote', 'quote')}${link('/orders', 'Orders', 'orders')}${link('/printers', 'Printers', 'printers')}
     ${isAdmin ? link('/admin', 'Admin', 'admin') : ''}
     ${me.user ? `<span class="me"><span>${esc(me.user.display_name || me.user.username)}</span>
       <a href="/account">Account</a><button id="logout">Log out</button></span>` : ''}`;

@@ -1,8 +1,8 @@
 """Orders: status workflow, saved files and history.
 
 Every saved quote is an order. It moves through the statuses in
-config/server.yaml (quoted → in queue → printing → done → delivered, or
-cancelled), keeps the files it was quoted from plus any attachments, and
+config/server.yaml (awaiting payment → in queue → printing → ready → done,
+or cancelled), keeps the files it was quoted from plus any attachments, and
 records who changed what in order_events.
 
 Files live on disk under FILES_DIR/<order id>/ with generated names; the
@@ -25,8 +25,12 @@ from pathlib import Path
 from typing import Callable
 
 from core import FILES_DIR, config, db, utcnow
+from webuilt import queue
 
 _listeners: list[Callable[[], None]] = []
+
+# Moving an order into one of these puts its plates in the printer queue.
+QUEUE_STATUSES = ("queued", "printing")
 
 
 class OrderError(Exception):
@@ -54,7 +58,14 @@ def notify() -> None:
 # ---------------------------------------------------------------------------
 
 def statuses() -> dict[str, dict]:
-    return config["server"].get("statuses") or {"quoted": {"label": "Quoted"}}
+    return config["server"].get("statuses") or {"awaiting_payment": {"label": "Awaiting payment"}}
+
+
+def initial_status() -> str:
+    """Where a quote made by an engineer starts: its price is known, so it
+    waits for payment. Falls back to the first status for a customised list."""
+    st = statuses()
+    return "awaiting_payment" if "awaiting_payment" in st else next(iter(st))
 
 
 def status_label(key: str, lang: str = "en") -> str:
@@ -216,10 +227,13 @@ def get_order(quote_id: int) -> dict:
     detail = json.loads(order.pop("detail_json") or "{}")
     order["quote"] = {"lines": detail.get("lines", []), "warnings": detail.get("warnings", []),
                       "plates": (detail.get("breakdown") or {}).get("plates", []),
-                      "economics": (detail.get("breakdown") or {}).get("economics", {})}
+                      "economics": (detail.get("breakdown") or {}).get("economics", {}),
+                      "special_additions": (detail.get("breakdown") or {}).get(
+                          "special_additions") or []}
     order["files"] = files
     order["events"] = events
     order["thumbnails"] = plates
+    order["jobs"] = queue.order_jobs(quote_id)
     return order
 
 
@@ -247,6 +261,16 @@ def update_order(quote_id: int, changes: dict, user: str) -> dict:
                     conn.execute("UPDATE quotes SET closed_at = NULL WHERE id = ?", (quote_id,))
                 add_event(conn, quote_id, user, "status",
                           f"{status_label(row['status'])} → {status_label(new)}")
+                # Joining the queue turns each plate into a job for the
+                # Printers page; leaving the business takes them out again.
+                if new in QUEUE_STATUSES:
+                    n = queue.ensure_jobs(conn, quote_id)
+                    if n:
+                        add_event(conn, quote_id, user, "queue",
+                                  f"{n} plate{'s' if n != 1 else ''} waiting for a printer")
+                elif new in ("cancelled", "rejected"):
+                    if queue.cancel_jobs(conn, quote_id):
+                        add_event(conn, quote_id, user, "queue", "removed from the queue")
         for key in ("handled_by", "notes", "customer_name", "customer_contact"):
             if key in changes and (changes[key] or None) != (row[key] or None):
                 value = str(changes[key]).strip()[:500] or None
@@ -258,6 +282,28 @@ def update_order(quote_id: int, changes: dict, user: str) -> dict:
                      [changes[k] for k in changes] + [utcnow(), quote_id])
     notify()
     return get_order(quote_id)
+
+
+def set_additions(quote_id: int, additions: list[dict], user: str) -> None:
+    """Replace an order's special additions (already validated by
+    pricing.resolve_additions) and move its total by their difference."""
+    import pricing                       # pricing imports nothing from here
+    with db() as conn:
+        row = _require(conn, quote_id)
+        if (row["payment_status"] or "unpaid") == "paid":
+            raise OrderError("This order is already paid, so its price can't change. "
+                             "Mark it unpaid first if the customer is paying the difference.")
+        quote = json.loads(row["detail_json"] or "{}")
+        if not quote.get("lines"):
+            raise OrderError("This order has no stored quote to add to.")
+        before = quote["total"]
+        new = pricing.with_additions(quote, additions)
+        conn.execute("UPDATE quotes SET detail_json = ?, total = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(new, ensure_ascii=False), new["total"], utcnow(), quote_id))
+        names = ", ".join(f"{a['label']} {a['amount']:,.2f}" for a in additions) or "none"
+        add_event(conn, quote_id, user, "special additions",
+                  f"{names} · total {before:,.2f} → {new['total']:,.2f}")
+    notify()
 
 
 def record_payment(quote_id: int, status: str, method: str | None, user: str) -> str | None:

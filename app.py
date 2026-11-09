@@ -50,6 +50,7 @@ import auth
 import housekeeping
 import orders
 import pricing
+from webuilt import queue
 import sheets
 import updater
 import receipt as receipt_doc
@@ -443,8 +444,8 @@ def log_quote(
             conn.execute(
                 "INSERT INTO plate_thumbnails (quote_id, plate, mime, data)"
                 " VALUES (?,?,?,?)", (quote_id, plate, mime, data))
-        conn.execute("UPDATE quotes SET created_by = ?, status = 'quoted', updated_at = ?"
-                     " WHERE id = ?", (created_by, utcnow(), quote_id))
+        conn.execute("UPDATE quotes SET created_by = ?, status = ?, updated_at = ?"
+                     " WHERE id = ?", (created_by, orders.initial_status(), utcnow(), quote_id))
         orders.add_event(conn, quote_id, created_by, "created",
                          f"{receipt_no}, {quote.currency} {quote.total:,.2f}")
         orders.save_files(conn, quote_id, files or [], created_by)
@@ -618,6 +619,11 @@ def options():
                 for k, v in ((pc.get("discounts") or {}).get("presets") or {}).items()
             ],
         },
+        "special_additions": [
+            {"id": k, "label": v.get("label", k), "label_th": v.get("label_th"),
+             "amount": v.get("amount")}
+            for k, v in ((pc.get("special_additions") or {}).get("presets") or {}).items()
+        ],
         "materials": sorted((config["filaments"].get("materials") or {}).keys()),
         "labour_rate_per_hour": pc.get("labour_rate_per_hour"),
         "payment_methods": config["receipt"].get("payment_methods") or [],
@@ -663,6 +669,7 @@ async def quote_endpoint(
     discount_percent: float | None = Form(None),
     discount_amount: float | None = Form(None),
     discount_reason: str | None = Form(None),
+    additions: str | None = Form(None, description="special additions, a JSON list"),
     save: bool = Form(True),
 ):
     """Quote an order of one or more sliced files.
@@ -736,6 +743,7 @@ async def quote_endpoint(
             prep_minutes=prep_minutes,
             discount={"preset": discount or None, "percent": discount_percent,
                       "amount": discount_amount, "reason": discount_reason},
+            additions=additions,
         )
     except pricing.QuoteInputError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -817,6 +825,8 @@ class ManualQuote(BaseModel):
     discount_percent: float | None = None
     discount_amount: float | None = None
     discount_reason: str | None = None
+    # --- special additions, see pricing.resolve_additions ---
+    additions: list[dict] | None = None
     save: bool = True
 
     @property
@@ -865,6 +875,7 @@ def quote_manual(body: ManualQuote, request: Request):
             prep_minutes=body.prep_minutes,
             discount={"preset": body.discount or None, "percent": body.discount_percent,
                       "amount": body.discount_amount, "reason": body.discount_reason},
+            additions=body.additions,
         )
     except pricing.QuoteInputError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -910,7 +921,8 @@ def list_orders(status: str | None = None, q: str | None = None,
 @app.get("/api/statuses")
 def list_statuses():
     return [{"id": k, "label": v.get("label", k), "label_th": v.get("label_th"),
-             "closes": bool(v.get("closes")), "pick_only": bool(v.get("pick_only"))}
+             "closes": bool(v.get("closes")), "pick_only": bool(v.get("pick_only")),
+             "next": v.get("next")}
             for k, v in orders.statuses().items()]
 
 
@@ -940,6 +952,26 @@ def change_order(quote_id: int, body: OrderChange, request: Request):
         orders.update_order(quote_id, body.model_dump(exclude_none=True), actor(request))
     except orders.OrderError as exc:
         code = 404 if str(exc).startswith("No order") else 422
+        raise HTTPException(code, str(exc)) from exc
+    return get_order(quote_id)
+
+
+class AdditionsChange(BaseModel):
+    additions: list[dict] = Field(default_factory=list)
+
+
+@app.put("/api/orders/{quote_id}/additions")
+def change_additions(quote_id: int, body: AdditionsChange, request: Request):
+    """Replace a saved order's special additions. The print is not
+    re-priced; the total moves by exactly the additions' change. Refused once
+    the order is paid, so the receipt can't drift from what was paid."""
+    try:
+        extras = pricing.resolve_additions(body.additions, config["pricing"])
+        orders.set_additions(quote_id, extras, actor(request))
+    except pricing.QuoteInputError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except orders.OrderError as exc:
+        code = 404 if str(exc).startswith("No order") else 409
         raise HTTPException(code, str(exc)) from exc
     return get_order(quote_id)
 
@@ -1006,6 +1038,94 @@ def set_outcome(quote_id: int, request: Request, outcome: str = Form(...)):
             raise HTTPException(404, f"No quote {quote_id}")
         orders.add_event(conn, quote_id, actor(request), "print outcome", outcome)
     return {"id": quote_id, "outcome": outcome}
+
+
+# ---------------------------------------------------------------------------
+# printers and the plate queue
+# ---------------------------------------------------------------------------
+
+def _queue_call(fn, *args):
+    try:
+        return fn(*args)
+    except queue.QueueError as exc:
+        code = 404 if str(exc).startswith("No ") else 409
+        raise HTTPException(code, str(exc)) from exc
+
+
+@app.get("/api/printers")
+def printers_board():
+    """Categories (from printers.yaml) with their printers, what each is
+    printing, its pinned queue, and the category's waiting plates."""
+    return queue.board()
+
+
+class PrinterIn(BaseModel):
+    name: str
+    category: str
+    model: str | None = None
+    notes: str | None = None
+
+
+class PrinterChange(BaseModel):
+    name: str | None = None
+    category: str | None = None
+    model: str | None = None
+    notes: str | None = None
+    active: bool | None = None
+    paused: bool | None = None
+
+
+@app.post("/api/printers")
+def add_printer(body: PrinterIn, request: Request):
+    require_admin(request)
+    return _queue_call(queue.add_printer, body.name, body.category, body.model, body.notes)
+
+
+@app.patch("/api/printers/{printer_id}")
+def change_printer(printer_id: int, body: PrinterChange, request: Request):
+    """Pausing is for everyone (a printer needs a nozzle change); renaming,
+    moving and switching off are for admins."""
+    changes = body.model_dump(exclude_none=True)
+    if set(changes) - {"paused"}:
+        require_admin(request)
+    return _queue_call(queue.update_printer, printer_id, changes)
+
+
+@app.post("/api/printers/{printer_id}/start-next")
+def printer_start_next(printer_id: int, request: Request):
+    return {"job_id": _queue_call(queue.start_next, printer_id, actor(request))}
+
+
+class JobAction(BaseModel):
+    printer_id: int | None = None
+    direction: str | None = None
+    outcome: str | None = None
+
+
+@app.post("/api/jobs/{job_id}/pin")
+def job_pin(job_id: int, body: JobAction, request: Request):
+    _queue_call(queue.pin, job_id, body.printer_id, actor(request))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/move")
+def job_move(job_id: int, body: JobAction, request: Request):
+    _queue_call(queue.move, job_id, body.direction or "", actor(request))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/start")
+def job_start(job_id: int, body: JobAction, request: Request):
+    if body.printer_id is None:
+        raise HTTPException(422, "Say which printer it's starting on.")
+    _queue_call(queue.start, job_id, body.printer_id, actor(request))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/finish")
+def job_finish(job_id: int, body: JobAction, request: Request):
+    _queue_call(queue.finish, job_id, body.outcome or "", actor(request))
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -1099,6 +1219,11 @@ def orders_page():
 @app.get("/orders/{quote_id:int}")
 def order_page(quote_id: int):
     return FileResponse(BASE / "static" / "order.html")
+
+
+@app.get("/printers")
+def printers_page():
+    return FileResponse(BASE / "static" / "printers.html")
 
 
 @app.get("/admin")

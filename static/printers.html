@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Printers · WeBuilt Quote</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/nav.css">
+<style>
+  .cat { margin-top:24px; }
+  .cat > header { display:flex; gap:8px 16px; align-items:baseline; flex-wrap:wrap; }
+  .cat > header h2 { margin:0; }
+  .waiting { margin-top:12px; border:1px solid color-mix(in srgb, #d97706 45%, var(--line));
+             background:color-mix(in srgb, #d97706 7%, var(--bg)); border-radius:10px; padding:10px 12px; }
+  .waiting h3, .card h3 { margin:0 0 6px; font-size:14px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:14px; margin-top:12px; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--panel);
+          display:flex; flex-direction:column; gap:10px; }
+  .card .top { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+  .now { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .bar { height:8px; border-radius:4px; background:var(--line); overflow:hidden; margin:6px 0; }
+  .bar > span { display:block; height:8px; background:var(--accent); }
+  .job { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:6px 0;
+         border-top:1px solid var(--line); font-size:14px; }
+  .job:first-of-type { border-top:0; }
+  .job .what { flex:1 1 180px; min-width:0; }
+  .job select { width:auto; padding:4px 6px; font-size:13px; }
+  .tiny { padding:4px 9px; font-size:13px; }
+  .icon { width:32px; padding:4px 0; }
+  .pill.warnpill { border-color:#d97706; color:#b45309; }
+  .add { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin-top:10px; }
+  .add > div { flex:1 1 140px; }
+  .stats { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Printers</h1>
+  <div class="sub">Quotes are priced by category. Paid plates wait in their category and go to the
+    next free printer in it, or you pin a plate to one printer. Finished and failed plates are
+    counted per printer.</div>
+  <div id="msg" class="msg" role="status"></div>
+  <div id="board"></div>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+let USER = null, BOARD = null;
+
+function setMsg(text, ok = true) {
+  $('#msg').textContent = text; $('#msg').className = 'msg ' + (ok ? 'ok' : 'bad');
+}
+
+function hm(iso) {
+  return iso ? new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit',
+    minute: '2-digit', day: 'numeric', month: 'short' }) : '';
+}
+function hours(h) {
+  const m = Math.round(h * 60);
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+}
+function jobWhat(j) {
+  return `<a href="/orders/${j.quote_id}"><strong>${esc(j.receipt_no || '#' + j.quote_id)}</strong></a>
+    ${esc(j.label || 'plate ' + j.plate)}${j.copies > 1 ? ' ×' + j.copies : ''}
+    ${j.reprint_of ? '<span class="pill warnpill">reprint</span>' : ''}
+    <div class="muted">${esc(j.materials || '')} · ${(+j.grams).toFixed(0)} g · ${hours(j.run_hours)}
+      ${j.customer_name ? ' · ' + esc(j.customer_name) : ''}</div>`;
+}
+function startSelect(j, cat) {
+  const free = cat.printers.filter(p => p.active && !p.paused && !p.current);
+  if (!free.length) return '';
+  return `<select data-act="start" data-job="${j.id}" aria-label="Start on a printer">
+    <option value="">Start on…</option>${free.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>`;
+}
+function pinSelect(j, cat) {
+  return `<select data-act="pin" data-job="${j.id}" aria-label="Which printer">
+    <option value="">Next free printer</option>${cat.printers.filter(p => p.active).map(p =>
+      `<option value="${p.id}"${p.id === j.printer_id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select>`;
+}
+function moveBtns(j) {
+  return `<button class="ghost icon" data-act="up" data-job="${j.id}" aria-label="Move up">↑</button>
+    <button class="ghost icon" data-act="down" data-job="${j.id}" aria-label="Move down">↓</button>`;
+}
+
+function printerCard(p, cat) {
+  const st = p.stats;
+  const state = !p.active ? '<span class="pill closed">Switched off</span>'
+    : p.current ? '<span class="pill live">Printing</span>'
+    : p.paused ? '<span class="pill warnpill">Paused</span>' : '<span class="pill paid">Free</span>';
+  const now = p.current ? `<div class="now">
+      <div>${jobWhat(p.current)}</div>
+      <div class="bar"><span style="width:${Math.round(p.current.progress * 100)}%"></span></div>
+      <div class="muted">ends about ${esc(hm(p.current.ends_at))}</div>
+      <div class="actions" style="display:flex;gap:8px;margin-top:6px">
+        <button class="tiny" data-act="done" data-job="${p.current.id}">Finished</button>
+        <button class="tiny ghost" data-act="failed" data-job="${p.current.id}">Failed — reprint</button></div>
+    </div>` : '';
+  const q = p.queue.length ? p.queue.map(j => `<div class="job">
+      <div class="what">${jobWhat(j)}<div class="muted">starts about ${esc(hm(j.starts_at))}</div></div>
+      ${moveBtns(j)}${pinSelect(j, cat)}</div>`).join('')
+    : `<div class="muted">Nothing pinned. Takes the next plate from the ${esc(cat.label)} queue.</div>`;
+  const canStart = p.active && !p.paused && !p.current && (p.queue.length || cat.waiting.length);
+  return `<article class="card">
+    <div class="top"><div><h3 style="font-size:16px">${esc(p.name)}</h3>
+      <div class="muted">${esc(p.model || '')}${p.notes ? ' · ' + esc(p.notes) : ''}</div></div>${state}</div>
+    ${now}
+    <div><h3>Up next on this printer</h3>${q}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ${canStart ? `<button class="tiny" data-act="next" data-printer="${p.id}">Start next plate</button>` : ''}
+      ${p.active ? `<button class="tiny ghost" data-act="pause" data-printer="${p.id}" data-on="${p.paused ? 0 : 1}">
+        ${p.paused ? 'Back in service' : 'Pause new plates'}</button>` : ''}
+      ${isAdmin() ? `<button class="tiny ghost" data-act="active" data-printer="${p.id}" data-on="${p.active ? 0 : 1}">
+        ${p.active ? 'Switch off' : 'Switch on'}</button>` : ''}
+      <span class="stats" style="margin-left:auto">${st.done + st.failed} plates · ${st.failed} failed
+        ${st.failure_rate !== null ? `(${Math.round(st.failure_rate * 100)}%)` : ''} · ${st.hours} h</span>
+    </div>
+  </article>`;
+}
+
+function isAdmin() { return !USER.server_mode || USER.user?.role === 'admin'; }
+
+function catHtml(cat) {
+  const waiting = cat.waiting.length ? `<section class="waiting">
+      <h3>Waiting for any free ${esc(cat.label)} printer · ${cat.waiting.length}</h3>
+      ${cat.waiting.map(j => `<div class="job"><div class="what">${jobWhat(j)}</div>
+        ${moveBtns(j)}${pinSelect(j, cat)}${startSelect(j, cat)}</div>`).join('')}</section>` : '';
+  const add = isAdmin() ? `<details style="margin-top:10px"><summary>Add a ${esc(cat.label)} printer</summary>
+      <div class="add" data-cat="${esc(cat.id)}">
+        <div><label>Name</label><input name="name" placeholder="e.g. P2S #2"></div>
+        <div><label>Model</label><input name="model" placeholder="e.g. Bambu Lab P2S"></div>
+        <div><label>Notes</label><input name="notes" placeholder="Room, AMS, nozzle…"></div>
+        <div class="shrink"><button data-act="add">Add printer</button></div></div></details>` : '';
+  return `<section class="cat">
+    <header><h2>${esc(cat.label)}</h2>
+      <span class="muted">${cat.printers.length} printer${cat.printers.length === 1 ? '' : 's'}
+        · priced as “${esc(cat.id)}” in printers.yaml</span>
+      ${cat.measured ? '' : '<span class="pill warnpill">failure rates not measured yet</span>'}</header>
+    ${waiting}
+    ${cat.printers.length ? `<div class="cards">${cat.printers.map(p => printerCard(p, cat)).join('')}</div>`
+      : `<div class="muted" style="margin-top:10px">No printers in this category yet${isAdmin() ? '. Add one below.' : '.'}</div>`}
+    ${add}
+  </section>`;
+}
+
+async function load() {
+  BOARD = (await api('/api/printers')).data;
+  $('#board').innerHTML = BOARD.categories.map(catHtml).join('') +
+    (BOARD.orphans.length ? `<div class="warn">${BOARD.orphans.length} plate(s) belong to a category no longer in printers.yaml.</div>` : '');
+}
+
+async function act(fn, done) {
+  try { await fn(); if (done) setMsg(done); await load(); }
+  catch (e) { setMsg(e.message, false); await load(); }
+}
+
+$('#board').onclick = e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const a = b.dataset.act, job = b.dataset.job, pr = b.dataset.printer;
+  if (a === 'up' || a === 'down')
+    return act(() => api(`/api/jobs/${job}/move`, { method: 'POST', json: { direction: a } }));
+  if (a === 'done' || a === 'failed')
+    return act(() => api(`/api/jobs/${job}/finish`, { method: 'POST', json: { outcome: a } }),
+      a === 'done' ? 'Plate finished' : 'Recorded as failed; the reprint is first in the queue');
+  if (a === 'next')
+    return act(() => api(`/api/printers/${pr}/start-next`, { method: 'POST' }), 'Started');
+  if (a === 'pause')
+    return act(() => api(`/api/printers/${pr}`, { method: 'PATCH', json: { paused: b.dataset.on === '1' } }));
+  if (a === 'active')
+    return act(() => api(`/api/printers/${pr}`, { method: 'PATCH', json: { active: b.dataset.on === '1' } }));
+  if (a === 'add') {
+    const box = b.closest('.add'), v = n => box.querySelector(`[name=${n}]`).value;
+    return act(() => api('/api/printers', { method: 'POST', json:
+      { name: v('name'), category: box.dataset.cat, model: v('model'), notes: v('notes') } }), 'Printer added');
+  }
+};
+$('#board').onchange = e => {
+  const s = e.target.closest('select[data-act]');
+  if (!s) return;
+  if (s.dataset.act === 'pin')
+    act(() => api(`/api/jobs/${s.dataset.job}/pin`, { method: 'POST',
+      json: { printer_id: s.value ? +s.value : null } }));
+  if (s.dataset.act === 'start' && s.value)
+    act(() => api(`/api/jobs/${s.dataset.job}/start`, { method: 'POST',
+      json: { printer_id: +s.value } }), 'Started');
+};
+
+(async () => {
+  USER = await renderNav('printers');
+  await load();
+  setInterval(() => { if (!document.hidden && !document.activeElement?.matches('input, select')) load(); }, 60000);
+})();
+</script>
+</body>
+</html>

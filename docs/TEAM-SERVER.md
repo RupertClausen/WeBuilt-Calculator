@@ -75,14 +75,43 @@ Every saved quote is an order. Statuses, in order:
 
 | | | |
 |---|---|---|
-| Quoted | เสนอราคา | |
-| In queue | รอพิมพ์ | |
-| Printing | กำลังปริ้น | |
+| Needs review | รอตรวจไฟล์ | for online orders (coming with the customer site) |
+| Not accepted | ไม่รับงาน | closes |
+| Awaiting payment | รอชำระเงิน | where a new quote starts |
+| Slip to check | รอตรวจสลิป | for online orders |
+| In queue | รอพิมพ์ | plates join the printer queue |
+| Printing | กำลังปริ้น | set by itself when the first plate starts |
+| Ready | พร้อมส่งมอบ | set by itself when the last plate finishes |
+| Shipped | จัดส่งแล้ว | |
 | Done | เสร็จสิ้น | closes |
-| Delivered | ส่งแล้ว | closes |
-| Cancelled | ยกเลิก | closes |
+| Cancelled | ยกเลิก | closes; plates leave the queue |
 
-Change them in `config/server.yaml` (labels, order, which ones close).
+Change them in `config/server.yaml` (labels, order, which ones close, and
+`next` for the one-click button). Orders from before 1.3 moved over by
+themselves: Quoted → Awaiting payment, Done → Ready, Delivered → Done.
+
+## Printers and the queue
+
+`config/printers.yaml` defines printer **categories** (Normal, Large): their
+rates and failure model, which is what quotes are priced on. The machines in
+each category are added on the **Printers** page (admins), so a new P2S is a
+new row there, not a config change.
+
+When an order goes to *In queue*, each plate waits in its category. From the
+Printers page: start it on a free printer, pin it to one printer, reorder
+with ↑ ↓, and mark it *Finished* or *Failed — reprint*. A failure counts
+against that printer and its reprint goes first. Anyone can pause a printer
+for new plates; admins add, rename and switch printers off (a switched-off
+printer hands its pinned plates back to the category).
+
+## Special additions
+
+Extra work at a fixed price (model repair, sanding, acetone, airbrush…) is
+added on the quote page or on the order page until the order is paid. Each
+is its own receipt line with the engineer's reason, added after rounding:
+no margin on it, no discount off it. Presets are in `config/pricing.yaml`
+under `special_additions`; their prices are still empty, so fill in your
+usual ones.
 
 Each order page has its status and who's handling it, payment, the customer
 and notes, its files (download, or attach more: the customer's model,

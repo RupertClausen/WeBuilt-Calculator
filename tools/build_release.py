@@ -38,7 +38,7 @@ INCLUDE_FILES = ["app.py", "core.py", "auth.py", "orders.py", "sheets.py",
                  "pricing.py", "receipt.py", "slicefile.py", "serve.py",
                  "launch.py", "updater.py", "release.json", "requirements.txt",
                  "run.sh", "run.bat", "README.md", "CHANGELOG.md"]
-INCLUDE_DIRS = ["config", "locales", "static", "docs", "deploy"]
+INCLUDE_DIRS = ["config", "locales", "static", "docs", "deploy", "webuilt"]
 
 # Fixed timestamp so the same source always gives the same zip.
 ZIP_DATE = (2020, 1, 1, 0, 0, 0)

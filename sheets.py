@@ -148,7 +148,7 @@ def sheet_rows() -> list[list]:
                 pr.get("label", r["printer"] or ""),
                 round(float(r["total"] or 0), 2),
                 "จ่ายแล้ว" if r["payment_status"] == "paid" else "ยังไม่จ่าย",
-                orders.status_label(r["status"] or "quoted", "th"),
+                orders.status_label(r["status"] or orders.initial_status(), "th"),
                 dl.get("label_th") or dl.get("label") or (r["delivery"] or ""),
                 r["plates"] or 0,
                 r["created_by"] or "",

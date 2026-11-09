@@ -16,6 +16,11 @@
   .danger { border-color:color-mix(in srgb, var(--bad) 45%, var(--line)); }
   .danger h2 { color:var(--bad); }
   button.del { background:var(--bad); }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chips button { padding:5px 11px; font-size:13px; border-radius:99px; }
+  .add-row { display:flex; gap:10px; align-items:baseline; }
+  .add-row > span:first-child { flex:1; min-width:0; }
+  .add-row .x { padding:2px 10px; }
 </style>
 </head>
 <body>
@@ -93,6 +98,33 @@
         <div class="thumbs" id="thumbs"></div>
       </section>
 
+      <section class="panel" id="jobsBox" hidden>
+        <h2>Plates in the queue</h2>
+        <ul class="list" id="jobs"></ul>
+        <div class="muted" style="margin-top:6px">Start, finish and reorder plates on the
+          <a href="/printers">Printers</a> page.</div>
+        <div id="msgJobs" class="msg"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Special additions</h2>
+        <div class="sub" style="margin-bottom:8px">Extra work the calculator can't see. Each is its own line on
+          the receipt, at exactly this price: no margin, no discount.</div>
+        <ul class="list" id="adds"></ul>
+        <div id="addEdit">
+          <div class="chips" id="presets"></div>
+          <div class="row" style="margin-top:8px">
+            <div><label for="addLabel">What</label><input id="addLabel" placeholder="e.g. Glue two halves"></div>
+            <div class="shrink" style="max-width:120px"><label for="addAmount">Amount</label>
+              <input id="addAmount" type="number" min="0" step="1" inputmode="decimal"></div>
+          </div>
+          <div style="margin-top:8px"><label for="addReason">Reason shown to the customer (optional)</label>
+            <input id="addReason" placeholder="e.g. Two walls were 0.3 mm; thickened to 0.8 mm"></div>
+          <div class="actions"><button id="addBtn" class="ghost">Add to this order</button></div>
+        </div>
+        <div id="msgAdds" class="msg"></div>
+      </section>
+
       <section class="panel">
         <h2>Price</h2>
         <table><tbody id="lines"></tbody></table>
@@ -109,7 +141,7 @@
 <script src="/static/common.js"></script>
 <script>
 const ID = +location.pathname.split('/').pop();
-let order = null;
+let order = null, PRESETS = [], CATS = {};
 
 function setMsg(id, text, ok = true) {
   const el = $(id); el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'bad');
@@ -164,6 +196,26 @@ function render(o) {
     <td class="num">${money(l.amount, o.currency)}</td></tr>`).join('') +
     `<tr><td><strong>Total</strong></td><td class="num"><strong>${money(o.total, o.currency)}</strong></td></tr>`;
 
+  // special additions: editable until the order is paid
+  const adds = o.quote.special_additions || [];
+  const paid = o.payment_status === 'paid';
+  $('#adds').innerHTML = adds.length ? adds.map((a, i) => `
+    <li class="add-row"><span><strong>${esc(a.label)}</strong>${a.reason ? `<div class="muted">${esc(a.reason)}</div>` : ''}</span>
+      <span class="num">${money(a.amount, o.currency)}</span>
+      ${paid ? '' : `<button class="ghost x" data-rm="${i}" aria-label="Remove ${esc(a.label)}">×</button>`}</li>`).join('')
+    : `<li class="muted">None.</li>`;
+  $('#addEdit').hidden = paid;
+  if (paid) setMsg('#msgAdds', 'Paid orders keep their price. Mark it unpaid to change additions.', true);
+
+  // the order's plates in the printer queue
+  const STATUS = { waiting: 'Waiting', printing: 'Printing', done: 'Finished', failed: 'Failed', cancelled: 'Cancelled' };
+  $('#jobsBox').hidden = !o.jobs.length;
+  $('#jobs').innerHTML = o.jobs.map(j => `
+    <li class="file"><span><strong>${esc(j.label || 'plate ' + j.plate)}</strong>${j.copies > 1 ? ' ×' + j.copies : ''}
+      ${j.reprint_of ? '<span class="pill">reprint</span>' : ''}
+      <div class="muted">${esc(CATS[j.category] || j.category)}${j.printer_name ? ' · ' + esc(j.printer_name) : j.status === 'waiting' ? ' · next free printer' : ''}</div></span>
+      <span class="pill ${j.status === 'printing' ? 'live' : j.status === 'done' ? 'paid' : ''}">${STATUS[j.status] || esc(j.status)}</span></li>`).join('');
+
   $('#events').innerHTML = o.events.slice().reverse().map(e => `
     <li><strong>${esc(e.action)}</strong>${e.detail ? ' — ' + esc(e.detail) : ''}
       <div class="muted">${esc(bangkokDate(e.at))} · ${esc(e.user || '')}</div></li>`).join('');
@@ -205,6 +257,45 @@ $('#del').onclick = async () => {
   } catch (e) { setMsg('#msgDel', e.message, false); }
 };
 
+// Additions are saved as the whole list, so the server always holds exactly
+// what this page shows.
+async function saveAdds(list, done) {
+  try {
+    render((await api(`/api/orders/${ID}/additions`, { method: 'PUT', json: { additions: list } })).data);
+    setMsg('#msgAdds', done);
+    return true;
+  } catch (e) { setMsg('#msgAdds', e.message, false); return false; }
+}
+const current = () => (order.quote.special_additions || []).map(a =>
+  ({ preset: a.preset, label: a.label, label_th: a.label_th, amount: a.amount, reason: a.reason }));
+
+$('#presets').onclick = e => {
+  const b = e.target.closest('button[data-preset]');
+  if (!b) return;
+  const p = PRESETS.find(x => x.id === b.dataset.preset);
+  $('#addLabel').value = p.label;
+  $('#addLabel').dataset.preset = p.id;
+  $('#addAmount').value = p.amount ?? '';
+  $(p.amount == null ? '#addAmount' : '#addReason').focus();
+};
+$('#addLabel').oninput = () => { delete $('#addLabel').dataset.preset; };
+$('#addBtn').onclick = async () => {
+  const preset = $('#addLabel').dataset.preset;
+  const item = { label: $('#addLabel').value.trim(), amount: $('#addAmount').value,
+                 reason: $('#addReason').value.trim() || null };
+  if (preset) item.preset = preset;
+  if (await saveAdds([...current(), item], `Added ${item.label}`)) {
+    $('#addLabel').value = ''; $('#addAmount').value = ''; $('#addReason').value = '';
+    delete $('#addLabel').dataset.preset;
+  }
+};
+$('#adds').onclick = e => {
+  const b = e.target.closest('button[data-rm]');
+  if (!b) return;
+  const list = current(), [gone] = list.splice(+b.dataset.rm, 1);
+  saveAdds(list, `Removed ${gone.label}`);
+};
+
 $('#upload').onclick = async () => {
   const files = $('#attach').files;
   if (!files.length) return setMsg('#msgFiles', 'Choose files first.', false);
@@ -231,6 +322,10 @@ $('#upload').onclick = async () => {
     `<option value="${esc(u.username)}">${esc(u.display_name || u.username)}</option>`).join('');
   $('#method').innerHTML = (opts.data.payment_methods || []).map(m =>
     `<option>${esc(m)}</option>`).join('');
+  PRESETS = opts.data.special_additions || [];
+  CATS = Object.fromEntries(opts.data.printers.map(p => [p.id, p.label]));
+  $('#presets').innerHTML = PRESETS.map(p => `<button class="ghost" data-preset="${esc(p.id)}">+ ${esc(p.label)}${
+    p.amount != null ? ' · ' + money(p.amount, opts.data.currency) : ''}</button>`).join('');
   try { render((await api(`/api/orders/${ID}`)).data); }
   catch (e) { $('main').innerHTML = `<div class="warn">${esc(e.message)}</div>`; }
 })();

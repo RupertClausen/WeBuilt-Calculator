@@ -47,11 +47,14 @@ const PAGE = 50;
 let offset = 0, total = 0, statuses = [], methods = [];
 
 // Change status right from the list: a dropdown for any status, and a
-// one-click button for the usual next step. "pick_only" statuses (Cancelled)
+// one-click button for the usual next step: the status's own `next` if it
+// names one, else the following status. "pick_only" statuses (Cancelled)
 // are never reached by the button, only chosen on purpose.
 function nextStatus(id) {
   const i = statuses.findIndex(s => s.id === id);
-  if (i < 0 || statuses[i].pick_only) return null;
+  if (i < 0) return null;
+  if (statuses[i].next) return statuses.find(s => s.id === statuses[i].next) || null;
+  if (statuses[i].pick_only) return null;
   return statuses.slice(i + 1).find(s => !s.pick_only) || null;
 }
 

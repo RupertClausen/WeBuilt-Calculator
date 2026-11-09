@@ -291,6 +291,13 @@ def build_view(
             t("rounding_detail",
               step=baht(rates.get("rounding_step", 1)).replace(".00", "")))
 
+    # Special additions: the engineer's own name for the work (Thai if they
+    # gave one) and their reason. Matched to the stored lines by position.
+    extras = bd.get("special_additions") or []
+    for i, a in enumerate(extras, start=1):
+        name = a.get("label_th") if lang == "th" and a.get("label_th") else a.get("label", "")
+        add(f"addition_{i}", name, a.get("reason") or t("addition_detail"))
+
     plate_rows = [{
         "label": pl["label"],
         "printer": printer_name(pl),
@@ -353,7 +360,7 @@ def build_view(
                           for m in bd.get("materials", [])),
             measured=all(pl.get("printer_measured", False) for pl in plates),
             free_reprints=free_reprints,
-        ),
+        ) + ([t("method_additions")] if extras else []),
     }
 
 
